@@ -280,15 +280,48 @@ struct device_attribute *attr, const char *buf, size_t count)
 	return count;
 }
 
+static ssize_t double_wakeup_show(struct device *dev,
+struct device_attribute *attr, char *buf)
+{
+	struct xiaomi_touch_pdata *pdata = dev_get_drvdata(dev);
+
+	return snprintf(buf, PAGE_SIZE, "%d\n", pdata->double_tap);
+}
+
+static ssize_t double_wakeup_store(struct device *dev,
+struct device_attribute *attr, const char *buf, size_t count)
+{
+	struct xiaomi_touch_pdata *pdata = dev_get_drvdata(dev);
+	struct xiaomi_touch_interface *touch_data = pdata->touch_data;
+	unsigned int input;
+
+	if (sscanf(buf, "%d", &input) < 0)
+		return -EINVAL;
+
+	if (input) {
+		pdata->double_tap = true;
+		touch_data->setModeValue(14, 1);
+	} else {
+		touch_data->setModeValue(14, 0);
+		pdata->double_tap = false;
+	}
+
+	return count;
+}
+
 static DEVICE_ATTR(palm_sensor, (S_IRUGO | S_IWUSR | S_IWGRP),
 		   palm_sensor_show, palm_sensor_store);
 
 static DEVICE_ATTR(p_sensor, (S_IRUGO | S_IWUSR | S_IWGRP),
 		   p_sensor_show, p_sensor_store);
 
+static DEVICE_ATTR(double_wakeup, (S_IRUGO | S_IWUSR | S_IWGRP),
+		   double_wakeup_show, double_wakeup_store);
+
 static struct attribute *touch_attr_group[] = {
 	&dev_attr_palm_sensor.attr,
 	&dev_attr_p_sensor.attr,
+	&dev_attr_double_wakeup.attr,
 	NULL,
 };
 

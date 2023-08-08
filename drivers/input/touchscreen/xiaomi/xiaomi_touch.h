@@ -47,7 +47,8 @@ enum  MODE_TYPE {
 	Touch_Report_Rate      = 9,
 	Touch_Fod_Enable       = 10,
 	Touch_Aod_Enable       = 11,
-	Touch_Mode_NUM         = 14,
+	Touch_Doubletap_Mode   = 14,
+	Touch_Mode_NUM         = 15,
 };
 
 struct xiaomi_touch_interface {
@@ -81,6 +82,7 @@ struct xiaomi_touch_pdata{
 	bool palm_changed;
 	int psensor_value;
 	bool psensor_changed;
+	bool double_tap;
 	const char *name;
 };
 
