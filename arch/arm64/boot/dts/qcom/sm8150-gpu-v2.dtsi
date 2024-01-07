@@ -16,7 +16,7 @@
 
 		opp-810000000 {
 			opp-hz = /bits/ 64 <810000000>;
-			opp-microvolt = <RPMH_REGULATOR_LEVEL_NOM_L2>;
+			opp-microvolt = <RPMH_REGULATOR_LEVEL_NOM_L3>;
 		};
 
 		opp-765000000 {
@@ -26,7 +26,7 @@
 
 		opp-675000000 {
 			opp-hz = /bits/ 64 <675000000>;
-			opp-microvolt = <RPMH_REGULATOR_LEVEL_SVS_L1P>;
+			opp-microvolt = <RPMH_REGULATOR_LEVEL_SVS_L2>;
 		};
 
 		opp-585000000 {
@@ -34,28 +34,18 @@
 			opp-microvolt = <RPMH_REGULATOR_LEVEL_SVS_L0>;
 		};
 
-		opp-499200000 {
-			opp-hz = /bits/ 64 <499200000>;
-			opp-microvolt = <RPMH_REGULATOR_LEVEL_LOW_SVS_L1>;
+		opp-495000000 {
+			opp-hz = /bits/ 64 <495000000>;
+			opp-microvolt = <RPMH_REGULATOR_LEVEL_LOW_SVS_L2>;
 		};
 
-		opp-427000000 {
-			opp-hz = /bits/ 64 <427000000>;
+		opp-405000000 {
+			opp-hz = /bits/ 64 <405000000>;
 			opp-microvolt = <RPMH_REGULATOR_LEVEL_LOW_SVS>;
 		};
 
-		opp-345000000 {
-			opp-hz = /bits/ 64 <345000000>;
-			opp-microvolt = <RPMH_REGULATOR_LEVEL_MIN_SVS>;
-		};
-
-		opp-257000000 {
-			opp-hz = /bits/ 64 <257000000>;
-			opp-microvolt = <RPMH_REGULATOR_LEVEL_MIN_SVS>;
-		};
-
-		opp-195000000 {
-			opp-hz = /bits/ 64 <195000000>;
+		opp-315000000 {
+			opp-hz = /bits/ 64 <315000000>;
 			opp-microvolt = <RPMH_REGULATOR_LEVEL_MIN_SVS>;
 		};
 	};
