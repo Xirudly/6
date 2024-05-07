@@ -47,6 +47,8 @@ enum  MODE_TYPE {
 	Touch_Report_Rate      = 9,
 	Touch_Fod_Enable       = 10,
 	Touch_Aod_Enable       = 11,
+	Touch_Resist_RF        = 12,
+	Touch_Idle_Time        = 13,
 	Touch_Mode_NUM         = 14,
 };
 
@@ -61,6 +63,10 @@ struct xiaomi_touch_interface {
 	int (*p_sensor_write)(int on);
 	int (*palm_sensor_read)(void);
 	int (*palm_sensor_write)(int on);
+	u8 (*panel_vendor_read)(void);
+	u8 (*panel_color_read)(void);
+	u8 (*panel_display_read)(void);
+	char (*touch_vendor_read)(void);
 };
 
 struct xiaomi_touch {
