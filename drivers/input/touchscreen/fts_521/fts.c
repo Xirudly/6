@@ -4655,7 +4655,6 @@ static const char *fts_get_config(struct fts_ts_info *info)
 	if (ret < OK) {
 		logError(1, "%s can't read lockdown info", tag);
 		return pdata->default_fw_name;
-#endif
 	}
 
 	ret |= fts_enableInterrupt();
