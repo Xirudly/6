@@ -92,7 +92,11 @@
 #define MS_TOTAL_CX_ADJH_LP_MAP_MAX "MS_TOUCH_LOWPOWER_TOTAL_CX_ADJ_HORIZONTAL"
 #define MS_TOTAL_CX_ADJV_LP_MAP_MAX "MS_TOUCH_LOWPOWER_TOTAL_CX_ADJ_VERTICAL"
 #define SS_RAW_FORCE_MIN_MAX			"SS_RAW_DATA_FORCE_MIN_MAX"
+#define SS_RAW_FORCE_EACH_NODE_MIN 	"SS_RAW_DATA_FORCE_EACH_MIN"
+#define SS_RAW_FORCE_EACH_NODE_MAX	"SS_RAW_DATA_FORCE_EACH_MAX"
 #define SS_RAW_SENSE_MIN_MAX			"SS_RAW_DATA_SENSE_MIN_MAX"
+#define SS_RAW_SENSE_EACH_NODE_MIN 	"SS_RAW_DATA_SENSE_EACH_MIN"
+#define SS_RAW_SENSE_EACH_NODE_MAX	"SS_RAW_DATA_SENSE_EACH_MAX"
 #define SS_RAW_FORCE_GAP				"SS_RAW_DATA_FORCE_GAP"
 #define SS_RAW_SENSE_GAP				"SS_RAW_DATA_SENSE_GAP"
 #define SS_RAW_LP_FORCE_MIN_MAX			"SS_RAW_LOWPOWER_DATA_FORCE_MIN_MAX"
@@ -190,6 +194,7 @@ typedef struct {
 	int SelfHoverSenceIxTotal;													/*SS Hover Total Sence Ix min/Max (for each node)* test */
 
 	int SelfForceRaw;															/*SS Force Raw min/Max test*/
+	int SelfForceRawMap;	/* /< SS Force Raw min/Max Map test */
     int SelfForceRawGap;														/*SS Force Raw Gap(max-min) test*/
 	int SelfForceRawLP;															/*SS Low Power Force Raw min/Max test*/
     int SelfForceRawGapLP;														/*SS Low Power Force Raw Gap(max-min) test*/
@@ -207,6 +212,7 @@ typedef struct {
 
 	int SelfSenseRaw;															/*SS Sense Raw min/Max test*/
     int SelfSenseRawGap;														/*SS Sense Raw Gap(max-min) test*/
+	int SelfSenseRawMap;	/* /< SS Sense Raw min/Max test for each node */
 	int SelfSenseRawLP;															/*SS Low Power Sense Raw min/Max test*/
     int SelfSenseRawGapLP;														/*SS Low Power Sense Raw Gap(max-min) test*/
 

@@ -357,7 +357,7 @@ static ssize_t fts_driver_test_write(struct file *file, const char __user *buf,
 
 	cmd = (u8 *)kzalloc(sizeof(u8) * count, GFP_KERNEL);
 	if (!cmd) {
-		res = ERROR_ALLOC;
+		res = -ENOMEM;
 		goto END;
 	}
 	if (access_ok(VERIFY_READ, buf, count) < OK

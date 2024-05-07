@@ -4,6 +4,7 @@
  * FTS Capacitive touch screen controller (FingerTipS)
  *
  * Copyright (C) 2016, STMicroelectronics Limited.
+ * Copyright (C) 2019 XiaoMi, Inc.
  * Authors: AMG(Analog Mems Group)
  *
  * 		marco.cali@st.com
@@ -68,8 +69,9 @@
 #ifdef KERNEL_ABOVE_2_6_38
 #include <linux/input/mt.h>
 #endif
-#include "../xiaomi/xiaomi_touch.h"
 
+#include <linux/input/touch_common_info.h>
+#include "../xiaomi/xiaomi_touch.h"
 #include "fts.h"
 #include "fts_lib/ftsCompensation.h"
 #include "fts_lib/ftsCore.h"
@@ -151,7 +153,15 @@ static int fts_mode_handler(struct fts_ts_info *info, int force);
 static int fts_chip_initialization(struct fts_ts_info *info, int init_type);
 static const char *fts_get_limit(struct fts_ts_info *info);
 static irqreturn_t fts_event_handler(int irq, void *ts_info);
-extern void lpm_disable_for_input(bool on);
+static int fts_enable_reg(struct fts_ts_info *info, bool enable);
+static int fts_mode_handler(struct fts_ts_info *info, int force);
+#ifdef CONFIG_INPUT_PRESS_NDT
+extern int ndt_write_tp_info(unsigned char keycode);
+int forcekey_touchid[4] = {-1};
+#endif
+#ifdef CONFIG_TOUCHSCREEN_XIAOMI_TOUCHFEATURE
+static int fts_set_cur_value(int mode, int value);
+#endif
 
 /**
 * Release all the touches in the linux input subsystem
@@ -169,8 +179,6 @@ void release_all_touches(struct fts_ts_info *info)
 		else
 			type = MT_TOOL_FINGER;
 #endif
-		info->coor[i][0] = -1;
-		info->coor[i][1] = -1;
 		input_mt_slot(info->input_dev, i);
 		input_mt_report_slot_state(info->input_dev, type, 0);
 		input_report_abs(info->input_dev, ABS_MT_TRACKING_ID, -1);
@@ -179,10 +187,12 @@ void release_all_touches(struct fts_ts_info *info)
 	info->touch_id = 0;
 	info->touch_skip = 0;
 	info->fod_id = 0;
+	info->fod_coordinate_update = false;
+	info->fod_x = 0;
+	info->fod_y = 0;
 #ifdef STYLUS_MODE
 	info->stylus_id = 0;
 #endif
-	lpm_disable_for_input(false);
 }
 
 /**
@@ -1606,27 +1616,6 @@ END:
 	return count;
 }
 
-static ssize_t fts_panel_color_show(struct device *dev,
-				    struct device_attribute *attr, char *buf)
-{
-	struct fts_ts_info *info = dev_get_drvdata(dev);
-	return snprintf(buf, PAGE_SIZE, "%c\n", info->lockdown_info[2]);
-}
-
-static ssize_t fts_panel_vendor_show(struct device *dev,
-				     struct device_attribute *attr, char *buf)
-{
-	struct fts_ts_info *info = dev_get_drvdata(dev);
-	return snprintf(buf, PAGE_SIZE, "%c\n", info->lockdown_info[6]);
-}
-
-static ssize_t fts_panel_display_show(struct device *dev,
-				     struct device_attribute *attr, char *buf)
-{
-	struct fts_ts_info *info = dev_get_drvdata(dev);
-	return snprintf(buf, PAGE_SIZE, "%c\n", info->lockdown_info[1]);
-}
-
 static ssize_t fts_lockdown_info_show(struct device *dev,
 				      struct device_attribute *attr, char *buf)
 {
@@ -1786,20 +1775,14 @@ static ssize_t fts_ms_raw_show(struct device *dev,
 {
 	int res = 0, count = 0, j = 0, sense_node = 0, force_node = 0, pos =
 	    0, last_pos = 0;
-	char *all_strbuff = NULL;
 	struct i2c_client *client = to_i2c_client(dev);
 	struct fts_ts_info *info = i2c_get_clientdata(client);
 	MutualSenseFrame frameMS;
+	int buf_size;
 
 	res = fts_disableInterrupt();
 	if (res < OK)
 		goto END;
-	all_strbuff = vmalloc(PAGE_SIZE);
-	if (!all_strbuff) {
-		logError(1, "%s %s alloc all_strbuff fail\n", tag, __func__);
-		goto END;
-	} else
-		memset(all_strbuff, 0, PAGE_SIZE);
 
 	setScanMode(SCAN_MODE_ACTIVE, 0x01);
 	mdelay(WAIT_FOR_FRESH_FRAMES);
@@ -1811,40 +1794,48 @@ static ssize_t fts_ms_raw_show(struct device *dev,
 	fts_mode_handler(info, 1);
 	sense_node = frameMS.header.sense_node;
 	force_node = frameMS.header.force_node;
+	buf_size = sense_node * force_node * 5 + (sense_node + force_node) * 4 + 50;
+
+	info->data_dump_buf = vmalloc(buf_size);
+	if (!info->data_dump_buf) {
+		logError(1, "%s %s alloc all_strbuff fail\n", tag, __func__);
+		goto END;
+	} else
+		memset(info->data_dump_buf, 0, buf_size);
 	pos +=
-	    snprintf(all_strbuff + last_pos, PAGE_SIZE,
+	    snprintf(info->data_dump_buf + last_pos, buf_size,
 		     "MsTouchRaw,%2d,%2d\n ,", force_node, sense_node);
 	last_pos = pos;
 	if (res >= OK) {
 		for (j = 0; j < sense_node; j++)
 			if ((j + 1) % sense_node) {
 				pos +=
-				    snprintf(all_strbuff + last_pos, PAGE_SIZE,
+				    snprintf(info->data_dump_buf + last_pos, buf_size,
 					     "C%02d,", j);
 				last_pos = pos;
 			} else {
 				pos +=
-				    snprintf(all_strbuff + last_pos, PAGE_SIZE,
+				    snprintf(info->data_dump_buf + last_pos, buf_size,
 					     "C%02d\nR00,", j);
 				last_pos = pos;
 			}
 		for (j = 0; j < sense_node * force_node; j++) {
 			if ((j + 1) % sense_node) {
 				pos +=
-				    snprintf(all_strbuff + last_pos, PAGE_SIZE,
+				    snprintf(info->data_dump_buf + last_pos, buf_size,
 					     "%4d,", frameMS.node_data[j]);
 				last_pos = pos;
 			} else {
 				if ((j + 1) / sense_node != force_node)
 					pos +=
-					    snprintf(all_strbuff + last_pos,
-						     PAGE_SIZE, "%4d\nR%02d,",
+					    snprintf(info->data_dump_buf + last_pos,
+						     buf_size, "%4d\nR%02d,",
 						     frameMS.node_data[j],
 						     (j + 1) / sense_node);
 				else
 					pos +=
-					    snprintf(all_strbuff + last_pos,
-						     PAGE_SIZE, "%4d\n",
+					    snprintf(info->data_dump_buf + last_pos,
+						     buf_size, "%4d\n",
 						     frameMS.node_data[j]);
 				last_pos = pos;
 			}
@@ -1854,12 +1845,175 @@ static ssize_t fts_ms_raw_show(struct device *dev,
 			frameMS.node_data = NULL;
 		}
 	}
-
-	count = snprintf(buf, PAGE_SIZE, "%s\n", all_strbuff);
-	vfree(all_strbuff);
+	logError(1, "%s %s len:%d\n", tag, __func__, strlen(info->data_dump_buf));
+	if (strlen(info->data_dump_buf) / (PAGE_SIZE - 1)) {
+		count = snprintf(buf, PAGE_SIZE - 1, "%s", info->data_dump_buf);
+		return PAGE_SIZE - 1;
+	} else
+		count = snprintf(buf, PAGE_SIZE, "%s\n", info->data_dump_buf);
+	vfree(info->data_dump_buf);
+	info->data_dump_buf = NULL;
 END:
 	fts_enableInterrupt();
 	return count;
+}
+
+static ssize_t fts_ms_raw1_show(struct device *dev,
+			       struct device_attribute *attr, char *buf)
+{
+	int count = 0;
+	struct i2c_client *client = to_i2c_client(dev);
+	struct fts_ts_info *info = i2c_get_clientdata(client);
+
+	if (info->data_dump_buf == NULL)
+		return 0;
+	count = snprintf(buf, PAGE_SIZE, "%s\n", info->data_dump_buf + PAGE_SIZE - 2);
+	vfree(info->data_dump_buf);
+	info->data_dump_buf = NULL;
+	fts_enableInterrupt();
+	return count;
+}
+
+static ssize_t fts_mutal_raw_ito_show(struct device *dev, struct device_attribute *attr, char *buf)
+{
+	MutualSenseFrame msRawFrame;
+	int last_pos = 0;
+	int pos = 0;
+	int j = 0, count = 0;
+	int sense_node = 0, force_node = 0;
+	int res = OK;
+	u8 sett[2] = {0x00, 0x00};
+	int buf_size;
+	struct i2c_client *client = to_i2c_client(dev);
+	struct fts_ts_info *info = i2c_get_clientdata(client);
+
+	logError(1, "%s ITO Production test is starting...\n", tag);
+	memset(&msRawFrame, 0x00, sizeof(msRawFrame));
+	res = fts_system_reset();
+
+	if (res < 0) {
+		logError(1, "%s %s: ERROR %08X \n", tag, __func__,
+			 ERROR_PROD_TEST_ITO);
+		return (res | ERROR_PROD_TEST_ITO);
+	}
+
+	sett[0] = SPECIAL_TUNING_IOFF;
+	logError(1, "%s Trimming Ioff... \n", tag);
+	res = writeSysCmd(SYS_CMD_SPECIAL_TUNING, sett, 2);
+
+	if (res < OK) {
+		logError(1, "%s production_test_ito: Trimm Ioff ERROR %08X \n",
+			 tag, (res | ERROR_PROD_TEST_ITO));
+		return (res | ERROR_PROD_TEST_ITO);
+	}
+
+	sett[0] = 0xFF;
+	sett[1] = 0xFF;
+	logError(1, "%s ITO Check command sent... \n", tag);
+	res = writeSysCmd(SYS_CMD_ITO, sett, 2);
+
+	if (res < OK) {
+		logError(1, "%s production_test_ito: ERROR %08X \n", tag,
+			 (res | ERROR_PROD_TEST_ITO));
+		return (res | ERROR_PROD_TEST_ITO);
+	}
+
+	logError(1, "%s ITO Command = OK! \n", tag);
+
+	logError(1, "%s MS RAW ITO ADJ TEST: \n", tag);
+	logError(1, "%s Collecting MS Raw data... \n", tag);
+	res |= getMSFrame3(MS_RAW, &msRawFrame);
+
+	if (res < OK) {
+			logError(1, "%s %s: getMSFrame failed... ERROR %08X \n",
+				 tag, __func__, ERROR_PROD_TEST_ITO);
+			goto ERROR;
+	}
+	sense_node = msRawFrame.header.sense_node;
+	force_node = msRawFrame.header.force_node;
+	buf_size = sense_node * force_node * 5 + (sense_node + force_node) * 4 + 50;
+
+	info->data_dump_buf = vmalloc(buf_size);
+	if (!info->data_dump_buf) {
+		logError(1, "%s %s alloc all_strbuff fail\n", tag, __func__);
+		goto ERROR;
+	} else
+		memset(info->data_dump_buf, 0, buf_size);
+
+	logError(1, "%s MS RAW ITO ADJ HORIZONTAL\n", tag);
+	pos += snprintf(info->data_dump_buf + last_pos, buf_size,
+			     "MsRawITO,%2d,%2d\n ,",
+			     force_node, sense_node);
+	last_pos = pos;
+
+	for (j = 0; j < sense_node; j++) {
+		if ((j + 1) % sense_node) {
+				pos +=
+				    snprintf(info->data_dump_buf + last_pos, buf_size,
+					     "C%02d,", j);
+				last_pos = pos;
+			} else {
+				pos +=
+				    snprintf(info->data_dump_buf + last_pos, buf_size,
+					     "C%02d\nR00,", j);
+				last_pos = pos;
+		}
+	}
+	for (j = 0; j < sense_node * force_node; j++) {
+			if ((j + 1) % sense_node) {
+				pos +=
+				    snprintf(info->data_dump_buf + last_pos, buf_size,
+					     "%4d,", (short)msRawFrame.node_data[j]);
+				last_pos = pos;
+			} else {
+				if ((j + 1) / sense_node != force_node)
+					pos +=
+					    snprintf(info->data_dump_buf + last_pos,
+						     buf_size, "%4d\nR%02d,",
+						     (short)msRawFrame.node_data[j],
+						     (j + 1) / sense_node);
+				else
+					pos +=
+					    snprintf(info->data_dump_buf + last_pos,
+						     buf_size, "%4d\n",
+						     (short)msRawFrame.node_data[j]);
+				last_pos = pos;
+			}
+	}
+ERROR:
+	if (msRawFrame.node_data != NULL) {
+		kfree(msRawFrame.node_data);
+		msRawFrame.node_data = NULL;
+	}
+	if (res < OK) {
+		logError(1, "%s production_test_ito_horizontal: ERROR %08X \n", tag,
+			 ERROR_PROD_TEST_ITO);
+	}
+	res = fts_system_reset();
+	if (strlen(info->data_dump_buf) / (PAGE_SIZE - 1)) {
+		count = snprintf(buf, PAGE_SIZE - 1, "%s", info->data_dump_buf);
+		return PAGE_SIZE - 1;
+	} else {
+		count = snprintf(buf, PAGE_SIZE, "%s\n", info->data_dump_buf);
+	}
+	vfree(info->data_dump_buf);
+	info->data_dump_buf = NULL;
+	return count;
+}
+
+static ssize_t fts_mutal_raw_ito1_show(struct device *dev, struct device_attribute *attr, char *buf)
+{
+	int count = 0;
+	struct i2c_client *client = to_i2c_client(dev);
+	struct fts_ts_info *info = i2c_get_clientdata(client);
+
+	if (info->data_dump_buf == NULL)
+		return 0;
+	count = snprintf(buf, PAGE_SIZE, "%s\n", info->data_dump_buf + PAGE_SIZE - 2);
+	vfree(info->data_dump_buf);
+	info->data_dump_buf = NULL;
+	return count;
+
 }
 
 static ssize_t fts_ms_cx_total_show(struct device *dev,
@@ -1867,59 +2021,61 @@ static ssize_t fts_ms_cx_total_show(struct device *dev,
 {
 	int res = 0, pos = 0, last_pos = 0, count = 0, j = 0, sense_node =
 	    0, force_node = 0;
-	char *all_strbuff = NULL;
+	int buf_size;
+	struct i2c_client *client = to_i2c_client(dev);
+	struct fts_ts_info *info = i2c_get_clientdata(client);
 	TotMutualSenseData totCompData;
 
 	res = fts_disableInterrupt();
 	if (res < OK)
 		goto END;
-	all_strbuff = vmalloc(PAGE_SIZE);
-	if (!all_strbuff) {
-		logError(1, "%s %s alloc all_strbuff fail\n", tag, __func__);
-		goto END;
-	} else
-		memset(all_strbuff, 0, PAGE_SIZE);
-
 	res =
 	    readTotMutualSenseCompensationData(LOAD_PANEL_CX_TOT_MS_TOUCH,
 					       &totCompData);
 	if (res >= OK) {
 		sense_node = totCompData.header.sense_node;
 		force_node = totCompData.header.force_node;
+		buf_size = sense_node * force_node * 5 + (sense_node + force_node) * 4 + 50;
+		info->data_dump_buf = vmalloc(buf_size);
+		if (!info->data_dump_buf) {
+			logError(1, "%s %s alloc all_strbuff fail\n", tag, __func__);
+			goto END;
+		} else
+			memset(info->data_dump_buf, 0, buf_size);
 		pos +=
-		    snprintf(all_strbuff + last_pos, PAGE_SIZE,
+		    snprintf(info->data_dump_buf + last_pos, buf_size,
 			     "MsTouchTotalCx,%2d,%2d\n ,", force_node,
 			     sense_node);
 		last_pos = pos;
 		for (j = 0; j < sense_node; j++)
 			if ((j + 1) % sense_node) {
 				pos +=
-				    snprintf(all_strbuff + last_pos, PAGE_SIZE,
+				    snprintf(info->data_dump_buf + last_pos, buf_size,
 					     "C%02d,", j);
 				last_pos = pos;
 			} else {
 				pos +=
-				    snprintf(all_strbuff + last_pos, PAGE_SIZE,
+				    snprintf(info->data_dump_buf + last_pos, buf_size,
 					     "C%02d\nR00,", j);
 				last_pos = pos;
 			}
 		for (j = 0; j < sense_node * force_node; j++) {
 			if ((j + 1) % sense_node) {
 				pos +=
-				    snprintf(all_strbuff + last_pos, PAGE_SIZE,
+				    snprintf(info->data_dump_buf + last_pos, buf_size,
 					     "%4d,", totCompData.node_data[j]);
 				last_pos = pos;
 			} else {
 				if ((j + 1) / sense_node != force_node)
 					pos +=
-					    snprintf(all_strbuff + last_pos,
-						     PAGE_SIZE, "%4d\nR%02d,",
+					    snprintf(info->data_dump_buf + last_pos,
+						     buf_size, "%4d\nR%02d,",
 						     totCompData.node_data[j],
 						     (j + 1) / sense_node);
 				else
 					pos +=
-					    snprintf(all_strbuff + last_pos,
-						     PAGE_SIZE, "%4d\n",
+					    snprintf(info->data_dump_buf + last_pos,
+						     buf_size, "%4d\n",
 						     totCompData.node_data[j]);
 				last_pos = pos;
 			}
@@ -1929,13 +2085,228 @@ static ssize_t fts_ms_cx_total_show(struct device *dev,
 			totCompData.node_data = NULL;
 		}
 	}
-
-	count = snprintf(buf, PAGE_SIZE, "%s\n", all_strbuff);
-	vfree(all_strbuff);
+	logError(1, "%s %s len:%d\n", tag, __func__, strlen(info->data_dump_buf));
+	if (strlen(info->data_dump_buf) / (PAGE_SIZE - 1)) {
+		count = snprintf(buf, PAGE_SIZE - 1, "%s", info->data_dump_buf);
+		return PAGE_SIZE - 1;
+	} else
+		count = snprintf(buf, PAGE_SIZE, "%s\n", info->data_dump_buf);
+	vfree(info->data_dump_buf);
+	info->data_dump_buf = NULL;
 END:
 	fts_enableInterrupt();
 	return count;
 
+}
+
+static ssize_t fts_ms_cx_total1_show(struct device *dev,
+			       struct device_attribute *attr, char *buf)
+{
+	int count = 0;
+	struct i2c_client *client = to_i2c_client(dev);
+	struct fts_ts_info *info = i2c_get_clientdata(client);
+
+	if (info->data_dump_buf == NULL)
+		return 0;
+	count = snprintf(buf, PAGE_SIZE, "%s\n", info->data_dump_buf + PAGE_SIZE - 2);
+	vfree(info->data_dump_buf);
+	info->data_dump_buf = NULL;
+	fts_enableInterrupt();
+	return count;
+}
+
+static ssize_t fts_ms_cx2_lp_show(struct device *dev,
+				    struct device_attribute *attr, char *buf)
+{
+	int res = 0, pos = 0, last_pos = 0, count = 0, j = 0, sense_node =
+	    0, force_node = 0;
+	int buf_size;
+	struct i2c_client *client = to_i2c_client(dev);
+	struct fts_ts_info *info = i2c_get_clientdata(client);
+	MutualSenseData msCompData;
+
+	res = fts_disableInterrupt();
+	if (res < OK)
+		goto END;
+	res = readMutualSenseCompensationData(LOAD_CX_MS_LOW_POWER, &msCompData);
+	if (res >= OK) {
+		sense_node = msCompData.header.sense_node;
+		force_node = msCompData.header.force_node;
+		buf_size = sense_node * force_node * 5 + (sense_node + force_node) * 4 + 50;
+		info->data_dump_buf = vmalloc(buf_size);
+		if (!info->data_dump_buf) {
+			logError(1, "%s %s alloc all_strbuff fail\n", tag, __func__);
+			goto END;
+		} else
+			memset(info->data_dump_buf, 0, buf_size);
+		pos +=
+		    snprintf(info->data_dump_buf + last_pos, buf_size,
+			     "MsTouchCx2Lp,%2d,%2d\n ,", force_node,
+			     sense_node);
+		last_pos = pos;
+		for (j = 0; j < sense_node; j++)
+			if ((j + 1) % sense_node) {
+				pos +=
+				    snprintf(info->data_dump_buf + last_pos, buf_size,
+					     "C%02d,", j);
+				last_pos = pos;
+			} else {
+				pos +=
+				    snprintf(info->data_dump_buf + last_pos, buf_size,
+					     "C%02d\nR00,", j);
+				last_pos = pos;
+			}
+		for (j = 0; j < sense_node * force_node; j++) {
+			if ((j + 1) % sense_node) {
+				pos +=
+				    snprintf(info->data_dump_buf + last_pos, buf_size,
+					     "%4d,", msCompData.node_data[j]);
+				last_pos = pos;
+			} else {
+				if ((j + 1) / sense_node != force_node)
+					pos +=
+					    snprintf(info->data_dump_buf + last_pos,
+						     buf_size, "%4d\nR%02d,",
+						     msCompData.node_data[j],
+						     (j + 1) / sense_node);
+				else
+					pos +=
+					    snprintf(info->data_dump_buf + last_pos,
+						     buf_size, "%4d\n",
+						     msCompData.node_data[j]);
+				last_pos = pos;
+			}
+		}
+		if (msCompData.node_data) {
+			kfree(msCompData.node_data);
+			msCompData.node_data = NULL;
+		}
+	}
+	logError(1, "%s %s len:%d\n", tag, __func__, strlen(info->data_dump_buf));
+	if (strlen(info->data_dump_buf) / (PAGE_SIZE - 1)) {
+		count = snprintf(buf, PAGE_SIZE - 1, "%s", info->data_dump_buf);
+		return PAGE_SIZE - 1;
+	} else
+		count = snprintf(buf, PAGE_SIZE, "%s\n", info->data_dump_buf);
+	vfree(info->data_dump_buf);
+	info->data_dump_buf = NULL;
+END:
+	fts_enableInterrupt();
+	return count;
+
+}
+
+static ssize_t fts_ms_cx2_lp1_show(struct device *dev,
+			       struct device_attribute *attr, char *buf)
+{
+	int count = 0;
+	struct i2c_client *client = to_i2c_client(dev);
+	struct fts_ts_info *info = i2c_get_clientdata(client);
+
+	if (info->data_dump_buf == NULL)
+		return 0;
+	count = snprintf(buf, PAGE_SIZE, "%s\n", info->data_dump_buf + PAGE_SIZE - 2);
+	vfree(info->data_dump_buf);
+	info->data_dump_buf = NULL;
+	fts_enableInterrupt();
+	return count;
+}
+
+static ssize_t fts_ms_cx2_lp_total_show(struct device *dev,
+				    struct device_attribute *attr, char *buf)
+{
+	int res = 0, pos = 0, last_pos = 0, count = 0, j = 0, sense_node =
+	    0, force_node = 0;
+	int buf_size;
+	struct i2c_client *client = to_i2c_client(dev);
+	struct fts_ts_info *info = i2c_get_clientdata(client);
+	TotMutualSenseData totCompData;
+
+	res = fts_disableInterrupt();
+	if (res < OK)
+		goto END;
+	res = readTotMutualSenseCompensationData(LOAD_PANEL_CX_TOT_MS_LOW_POWER, &totCompData);
+	if (res >= OK) {
+		sense_node = totCompData.header.sense_node;
+		force_node = totCompData.header.force_node;
+		buf_size = sense_node * force_node * 5 + (sense_node + force_node) * 4 + 50;
+		info->data_dump_buf = vmalloc(buf_size);
+		if (!info->data_dump_buf) {
+			logError(1, "%s %s alloc all_strbuff fail\n", tag, __func__);
+			goto END;
+		} else
+			memset(info->data_dump_buf, 0, buf_size);
+		pos +=
+		    snprintf(info->data_dump_buf + last_pos, buf_size,
+			     "MsTouchTxotalCx2Lp,%2d,%2d\n ,", force_node,
+			     sense_node);
+		last_pos = pos;
+		for (j = 0; j < sense_node; j++)
+			if ((j + 1) % sense_node) {
+				pos +=
+				    snprintf(info->data_dump_buf + last_pos, buf_size,
+					     "C%02d,", j);
+				last_pos = pos;
+			} else {
+				pos +=
+				    snprintf(info->data_dump_buf + last_pos, buf_size,
+					     "C%02d\nR00,", j);
+				last_pos = pos;
+			}
+		for (j = 0; j < sense_node * force_node; j++) {
+			if ((j + 1) % sense_node) {
+				pos +=
+				    snprintf(info->data_dump_buf + last_pos, buf_size,
+					     "%4d,", totCompData.node_data[j]);
+				last_pos = pos;
+			} else {
+				if ((j + 1) / sense_node != force_node)
+					pos +=
+					    snprintf(info->data_dump_buf + last_pos,
+						     buf_size, "%4d\nR%02d,",
+						     totCompData.node_data[j],
+						     (j + 1) / sense_node);
+				else
+					pos +=
+					    snprintf(info->data_dump_buf + last_pos,
+						     buf_size, "%4d\n",
+						     totCompData.node_data[j]);
+				last_pos = pos;
+			}
+		}
+		if (totCompData.node_data) {
+			kfree(totCompData.node_data);
+			totCompData.node_data = NULL;
+		}
+	}
+	logError(1, "%s %s len:%d\n", tag, __func__, strlen(info->data_dump_buf));
+	if (strlen(info->data_dump_buf) / (PAGE_SIZE - 1)) {
+		count = snprintf(buf, PAGE_SIZE - 1, "%s", info->data_dump_buf);
+		return PAGE_SIZE - 1;
+	} else
+		count = snprintf(buf, PAGE_SIZE, "%s\n", info->data_dump_buf);
+	vfree(info->data_dump_buf);
+	info->data_dump_buf = NULL;
+END:
+	fts_enableInterrupt();
+	return count;
+
+}
+
+static ssize_t fts_ms_cx2_lp_total1_show(struct device *dev,
+			       struct device_attribute *attr, char *buf)
+{
+	int count = 0;
+	struct i2c_client *client = to_i2c_client(dev);
+	struct fts_ts_info *info = i2c_get_clientdata(client);
+
+	if (info->data_dump_buf == NULL)
+		return 0;
+	count = snprintf(buf, PAGE_SIZE, "%s\n", info->data_dump_buf + PAGE_SIZE - 2);
+	vfree(info->data_dump_buf);
+	info->data_dump_buf = NULL;
+	fts_enableInterrupt();
+	return count;
 }
 
 static ssize_t fts_ss_ix_total_show(struct device *dev,
@@ -2038,6 +2409,7 @@ static ssize_t fts_ss_ix_total_show(struct device *dev,
 
 	count = snprintf(buf, PAGE_SIZE, "%s\n", all_strbuff);
 	vfree(all_strbuff);
+	all_strbuff = NULL;
 END:
 	fts_enableInterrupt();
 	return count;
@@ -2128,6 +2500,7 @@ static ssize_t fts_ss_raw_show(struct device *dev,
 
 	count = snprintf(buf, PAGE_SIZE, "%s\n", all_strbuff);
 	vfree(all_strbuff);
+	all_strbuff = NULL;
 END:
 	fts_enableInterrupt();
 	return count;
@@ -2161,7 +2534,7 @@ static ssize_t fts_strength_frame_show(struct device *dev,
 	   flushFIFO();
 	 */
 	fts_mode_handler(info, 1);
-	all_strbuff = (char *)kmalloc(PAGE_SIZE * sizeof(char), GFP_KERNEL);
+	all_strbuff = (char *)kmalloc(size * sizeof(char), GFP_KERNEL);
 
 	if (all_strbuff != NULL) {
 		memset(all_strbuff, 0, size);
@@ -2196,8 +2569,9 @@ END:
 	return count;
 }
 
-int fts_hover_auto_tune(struct fts_ts_info *info) {
-	int res=OK;
+int fts_hover_auto_tune(struct fts_ts_info *info)
+{
+	int res = OK;
 	u8 sett[2];
 	logError(0, "%s start...\n", tag, __func__);
 
@@ -2246,7 +2620,7 @@ static ssize_t fts_hover_autotune_store(struct device *dev,
 	if (on)
 		ret = fts_hover_auto_tune(info);
 	if (ret < OK)
-		return -1;
+		return -EIO;
 
 	return count;
 }
@@ -2266,7 +2640,7 @@ static ssize_t fts_hover_raw_show(struct device *dev,
 	res = fts_disableInterrupt();
 	if (res < OK)
 		goto END;
-	all_strbuff = vmalloc(PAGE_SIZE * 4);
+	all_strbuff = vmalloc(PAGE_SIZE);
 	if (!all_strbuff) {
 		logError(1, "%s %s alloc all_strbuff fail\n", tag, __func__);
 		goto END;
@@ -2276,7 +2650,7 @@ static ssize_t fts_hover_raw_show(struct device *dev,
 	res = fts_write_dma_safe(hover_cnt, sizeof(hover_cnt));
 	if (res != OK) {
 		logError(1,
-			 "%s hover clear count ERROR = %d\n",tag, res);
+			 "%s hover clear count ERROR = %d\n", tag, res);
 		goto END;
 	}
 
@@ -2507,6 +2881,7 @@ static ssize_t fts_hover_raw_show(struct device *dev,
 
 	count = snprintf(buf, PAGE_SIZE, "%s\n", all_strbuff);
 	vfree(all_strbuff);
+	all_strbuff = NULL;
 END:
 	fts_mode_handler(info, 1);
 	fts_enableInterrupt();
@@ -2616,61 +2991,8 @@ static ssize_t fts_grip_area_store(struct device *dev,
 	}
 	return count;
 }
+
 #ifdef CONFIG_FTS_FOD_AREA_REPORT
-static ssize_t fts_fod_status_show(struct device *dev,
-				    struct device_attribute *attr, char *buf)
-{
-	struct fts_ts_info *info = dev_get_drvdata(dev);
-
-	return snprintf(buf, TSP_BUF_SIZE, "%d\n", info->fod_ok);
-}
-
-static ssize_t fts_fod_status_store(struct device *dev,
-				     struct device_attribute *attr,
-				     const char *buf, size_t count)
-{
-	struct fts_ts_info *info = dev_get_drvdata(dev);
-	int res = 0;
-	u8 gesture_cmd[6] = {0xA2, 0x03, 0x20, 0x00, 0x00, 0x01};
-	u8 single_only_cmd[4] = {0xC0, 0x02, 0x00, 0x00};
-	u8 single_double_cmd[4] = {0xC0, 0x02, 0x01, 0x1E};
-
-	logError(1, " %s %s buf:%c,count:%zu\n", tag, __func__, buf[0], count);
-	sscanf(buf, "%u", &info->fod_ok);
-
-	mutex_lock(&info->fod_mutex);
-	if (info->fod_status) {
-		if (info->fod_status_set) {
-			logError(1, " %s %s fod status has set\n", tag, __func__);
-		} else {
-			res = fts_write_dma_safe(gesture_cmd, ARRAY_SIZE(gesture_cmd));
-			if (res < OK)
-					logError(1, "%s %s: enter gesture and longpress failed! ERROR %08X recovery in senseOff...\n",
-						 tag, __func__, res);
-
-			if (info->sensor_sleep) {
-				logError(1, " %s %s set fod cmd in sensor off status\n", tag, __func__);
-				res = setScanMode(SCAN_MODE_LOW_POWER, 0);
-				if (info->gesture_enabled == 1) {
-					res = fts_write_dma_safe(single_double_cmd, ARRAY_SIZE(single_double_cmd));
-					if (res < OK)
-							logError(1, "%s %s: set single and double tap delay time failed! ERROR %08X\n", tag, __func__, res);
-				} else {
-					res = fts_write_dma_safe(single_only_cmd, ARRAY_SIZE(single_only_cmd));
-					if (res < OK)
-							logError(1, "%s %s: set single only delay time failed! ERROR %08X\n", tag, __func__, res);
-				}
-			}
-			fts_enableInterrupt();
-			info->fod_status_set = true;
-		}
-	}
-	mutex_unlock(&info->fod_mutex);
-	logError(1, " %s %s end\n", tag, __func__);
-
-	return count;
-}
-
 static ssize_t fts_fod_test_store(struct device *dev,
 				     struct device_attribute *attr,
 				     const char *buf, size_t count)
@@ -2682,7 +3004,6 @@ static ssize_t fts_fod_test_store(struct device *dev,
 	sscanf(buf, "%u", &value);
 	if (value) {
 		input_report_key(info->input_dev, BTN_INFO, 1);
-		input_report_key(info->input_dev, KEY_INFO, 1);
 		info->fod_pressed = true;
 		input_sync(info->input_dev);
 		input_mt_slot(info->input_dev, 0);
@@ -2700,12 +3021,44 @@ static ssize_t fts_fod_test_store(struct device *dev,
 		input_mt_report_slot_state(info->input_dev, MT_TOOL_FINGER, 0);
 		input_report_abs(info->input_dev, ABS_MT_TRACKING_ID, -1);
 		input_report_key(info->input_dev, BTN_INFO, 0);
-		input_report_key(info->input_dev, KEY_INFO, 0);
 		input_sync(info->input_dev);
 	}
 	return count;
 }
 #endif
+static ssize_t fts_ellipse_data_show(struct device *dev,
+				    struct device_attribute *attr, char *buf)
+{
+	int res;
+	SelfSenseFrame frameSS;
+	int force_node;
+	int sense_node;
+
+	logError(1, "%s %s\n", tag, __func__);
+	res = fts_disableInterrupt();
+	if (res < OK) {
+		logError(1, "%s %s disable irq error\n", tag, __func__);
+	}
+	setScanMode(SCAN_MODE_ACTIVE, 0x01);
+	mdelay(WAIT_FOR_FRESH_FRAMES);
+	setScanMode(SCAN_MODE_ACTIVE, 0x00);
+	mdelay(WAIT_AFTER_SENSEOFF);
+	flushFIFO();
+	res = getSSFrame3(SS_RAW, &frameSS);
+	if (res < OK) {
+		logError(1, "%s Error while taking the SS frame... ERROR %08X \n", tag, res);
+		fts_enableInterrupt();
+		return 0;
+	}
+	force_node = frameSS.header.force_node;
+	sense_node = frameSS.header.sense_node;
+	fts_mode_handler(fts_info, 1);
+	fts_enableInterrupt();
+
+	return snprintf(buf, PAGE_SIZE, "%d %d %d %d %d\n", frameSS.force_data[force_node / 4], frameSS.force_data[force_node * 3 / 4],
+			 frameSS.sense_data[sense_node / 4], frameSS.sense_data[sense_node / 2], frameSS.sense_data[sense_node * 3 / 4]);
+}
+
 #ifdef CONFIG_TOUCHSCREEN_XIAOMI_TOUCHFEATURE
 static ssize_t fts_touchgame_show(struct device *dev,
 				    struct device_attribute *attr, char *buf)
@@ -2737,6 +3090,18 @@ static ssize_t fts_touchgame_show(struct device *dev,
 		get_value[4], get_value[5], get_value[6],
 		grip_value[0], grip_value[1], grip_value[2], grip_value[3],
 		grip_value[4], grip_value[5], grip_value[6]);
+}
+
+static ssize_t fts_touchgame_store(struct device *dev,
+				     struct device_attribute *attr,
+				     const char *buf, size_t count)
+{
+	int mode, value;
+
+	logError(1, " %s %s,buf:%s,count:%zu\n", tag, __func__, buf, count);
+	sscanf(buf, "%d %d", &mode, &value);
+	fts_set_cur_value(mode, value);
+	return count;
 }
 #endif
 
@@ -2947,9 +3312,6 @@ static DEVICE_ATTR(fts_lockdown, (S_IRUGO | S_IWUSR | S_IWGRP),
 		   fts_lockdown_show, fts_lockdown_store);
 static DEVICE_ATTR(fwupdate, (S_IRUGO | S_IWUSR | S_IWGRP), fts_fwupdate_show,
 		   fts_fwupdate_store);
-static DEVICE_ATTR(panel_vendor, (S_IRUGO), fts_panel_vendor_show, NULL);
-static DEVICE_ATTR(panel_color, (S_IRUGO), fts_panel_color_show, NULL);
-static DEVICE_ATTR(panel_display, (S_IRUGO), fts_panel_display_show, NULL);
 static DEVICE_ATTR(ms_strength, (S_IRUGO), fts_strength_frame_show, NULL);
 static DEVICE_ATTR(lockdown_info, (S_IRUGO), fts_lockdown_info_show, NULL);
 static DEVICE_ATTR(appid, (S_IRUGO), fts_appid_show, NULL);
@@ -2957,8 +3319,16 @@ static DEVICE_ATTR(mode_active, (S_IRUGO), fts_mode_active_show, NULL);
 static DEVICE_ATTR(fw_file_test, (S_IRUGO), fts_fw_test_show, NULL);
 static DEVICE_ATTR(selftest_info, (S_IRUGO), fts_selftest_info_show, NULL);
 static DEVICE_ATTR(ms_raw, (S_IRUGO), fts_ms_raw_show, NULL);
+static DEVICE_ATTR(ms_raw1, (S_IRUGO), fts_ms_raw1_show, NULL);
 static DEVICE_ATTR(ss_raw, (S_IRUGO), fts_ss_raw_show, NULL);
+static DEVICE_ATTR(mutal_raw_ito, (S_IRUGO), fts_mutal_raw_ito_show, NULL);
+static DEVICE_ATTR(mutal_raw_ito1, (S_IRUGO), fts_mutal_raw_ito1_show, NULL);
 static DEVICE_ATTR(ms_cx_total, (S_IRUGO), fts_ms_cx_total_show, NULL);
+static DEVICE_ATTR(ms_cx_total1, (S_IRUGO), fts_ms_cx_total1_show, NULL);
+static DEVICE_ATTR(ms_cx2_lp, (S_IRUGO), fts_ms_cx2_lp_show, NULL);
+static DEVICE_ATTR(ms_cx2_lp1, (S_IRUGO), fts_ms_cx2_lp1_show, NULL);
+static DEVICE_ATTR(ms_cx2_lp_total, (S_IRUGO), fts_ms_cx2_lp_total_show, NULL);
+static DEVICE_ATTR(ms_cx2_lp_total1, (S_IRUGO), fts_ms_cx2_lp_total1_show, NULL);
 static DEVICE_ATTR(ss_ix_total, (S_IRUGO), fts_ss_ix_total_show, NULL);
 static DEVICE_ATTR(ss_hover, (S_IRUGO), fts_hover_raw_show, NULL);
 static DEVICE_ATTR(stm_fts_cmd, (S_IRUGO | S_IWUSR | S_IWGRP), stm_fts_cmd_show,
@@ -3012,7 +3382,7 @@ static DEVICE_ATTR(hover_tune, (S_IRUGO | S_IWUSR | S_IWGRP), NULL, fts_hover_au
 
 #ifdef CONFIG_TOUCHSCREEN_XIAOMI_TOUCHFEATURE
 static DEVICE_ATTR(touchgame, (S_IRUGO | S_IWUSR | S_IWGRP),
-		   fts_touchgame_show, NULL);
+		   fts_touchgame_show, fts_touchgame_store);
 #endif
 static struct attribute *fts_attr_group[] = {
 	&dev_attr_fwupdate.attr,
@@ -3041,9 +3411,6 @@ static struct attribute *fts_attr_group[] = {
 #endif
 #endif
 	&dev_attr_fts_lockdown.attr,
-	&dev_attr_panel_vendor.attr,
-	&dev_attr_panel_color.attr,
-	&dev_attr_panel_display.attr,
 	&dev_attr_lockdown_info.attr,
 #ifdef GESTURE_MODE
 	&dev_attr_gesture_mask.attr,
@@ -3051,8 +3418,16 @@ static struct attribute *fts_attr_group[] = {
 #endif
 	&dev_attr_selftest_info.attr,
 	&dev_attr_ms_raw.attr,
+	&dev_attr_ms_raw1.attr,
 	&dev_attr_ss_raw.attr,
+	&dev_attr_mutal_raw_ito.attr,
+	&dev_attr_mutal_raw_ito1.attr,
 	&dev_attr_ms_cx_total.attr,
+	&dev_attr_ms_cx_total1.attr,
+	&dev_attr_ms_cx2_lp.attr,
+	&dev_attr_ms_cx2_lp1.attr,
+	&dev_attr_ms_cx2_lp_total.attr,
+	&dev_attr_ms_cx2_lp_total1.attr,
 	&dev_attr_ss_ix_total.attr,
 	&dev_attr_ms_strength.attr,
 	&dev_attr_ss_hover.attr,
@@ -3071,11 +3446,9 @@ static DEVICE_ATTR(touch_suspend_notify, (S_IRUGO | S_IRGRP),
 		   fts_touch_suspend_notify_show, NULL);
 #endif
 #ifdef CONFIG_FTS_FOD_AREA_REPORT
-static DEVICE_ATTR(fod_status, (S_IRUGO | S_IWUSR | S_IWGRP),
-		   fts_fod_status_show, fts_fod_status_store);
-
 static DEVICE_ATTR(fod_test, (S_IRUGO | S_IWUSR | S_IWGRP), NULL, fts_fod_test_store);
 #endif
+static DEVICE_ATTR(ellipse_data, (S_IRUGO), fts_ellipse_data_show, NULL);
 
 #ifdef CONFIG_SECURE_TOUCH
 DEVICE_ATTR(secure_touch_enable, (S_IRUGO | S_IWUSR | S_IWGRP), fts_secure_touch_enable_show,  fts_secure_touch_enable_store);
@@ -3130,8 +3503,68 @@ static bool fts_is_in_fodarea(int x, int y)
 		return false;
 }
 
-static bool finger_report_flag;
+static bool fts_fingerprint_is_enable(void)
+{
+/* fod status = -1 as default value, means fingerprint is not enabled*
+ * fod_status = 100 as all fingers in the system is deleted
+ * fod_status = 0 means fingerpirint is not enabled
+ * fod_status = 1 means fingerprint is in authentication
+ * fod_status = 2 means fingerprint is in enroll
+ */
+	if (fts_info->fod_status != 0 && fts_info->fod_status != -1 && fts_info->fod_status != 100)
+		return true;
+	else
+		return false;
+}
 
+static bool finger_report_flag;
+#endif
+
+static bool fts_need_enter_lp_mode(void)
+{
+/* fod status = -1 as default value, means fingerprint is not enabled*
+ * fod_status = 100 as all fingers in the system is deleted
+ * aod_status != 0 means single tap in aod is supported
+ */
+	if (fts_info->aod_status || (fts_info->fod_status != -1 && fts_info->fod_status != 100))
+		return true;
+	else
+		return false;
+}
+
+#ifdef CONFIG_INPUT_PRESS_NDT
+#define LU_FORCEKEY_CENTER_X 759
+#define LU_FORCEKEY_CENTER_Y 785
+
+#define LD_FORCEKEY_CENTER_X 759
+#define LD_FORCEKEY_CENTER_Y 1102
+
+#define RU_FORCEKEY_CENTER_X 1927
+#define RU_FORCEKEY_CENTER_Y 785
+
+#define RD_FORCEKEY_CENTER_X 1927
+#define RD_FORCEKEY_CENTER_Y 1102
+
+#define FORCEKEY_WIDTH 89
+#define FORCEKEY_HEIGHT 350
+int fts_forcekey_code_get(int x, int y)
+{
+	int val = -1;
+
+	if ((x > LU_FORCEKEY_CENTER_X - FORCEKEY_WIDTH / 2) && (x < LU_FORCEKEY_CENTER_X + FORCEKEY_WIDTH / 2)
+			&& (y > LU_FORCEKEY_CENTER_Y - FORCEKEY_HEIGHT / 2) && (y < LU_FORCEKEY_CENTER_Y + FORCEKEY_HEIGHT / 2))
+		val = 0;
+	if ((x > LD_FORCEKEY_CENTER_X - FORCEKEY_WIDTH / 2) && (x < LD_FORCEKEY_CENTER_X + FORCEKEY_WIDTH / 2)
+			&& (y > LD_FORCEKEY_CENTER_Y - FORCEKEY_HEIGHT / 2) && (y < LD_FORCEKEY_CENTER_Y + FORCEKEY_HEIGHT / 2))
+		val = 1;
+	if ((x > RU_FORCEKEY_CENTER_X - FORCEKEY_WIDTH / 2) && (x < RU_FORCEKEY_CENTER_X + FORCEKEY_WIDTH / 2)
+			&& (y > RU_FORCEKEY_CENTER_Y - FORCEKEY_HEIGHT / 2) && (y < RU_FORCEKEY_CENTER_Y + FORCEKEY_HEIGHT / 2))
+		val = 2;
+	if ((x > RD_FORCEKEY_CENTER_X - FORCEKEY_WIDTH / 2) && (x < RD_FORCEKEY_CENTER_X + FORCEKEY_WIDTH / 2)
+			&& (y > RD_FORCEKEY_CENTER_Y - FORCEKEY_HEIGHT / 2) && (y < RD_FORCEKEY_CENTER_Y + FORCEKEY_HEIGHT / 2))
+		val = 3;
+	return val;
+}
 #endif
 /**
 * Event handler for enter and motion events (EVT_ID_ENTER_POINT, EVT_ID_MOTION_POINT )
@@ -3145,6 +3578,10 @@ static void fts_enter_pointer_event_handler(struct fts_ts_info *info,
 	int x, y, z, distance;
 	u8 touchType;
 	int area_size;
+#ifdef CONFIG_INPUT_PRESS_NDT
+	int forcekey_code = -1;
+#endif
+
 #ifndef CONFIG_FTS_FOD_AREA_REPORT
 	if (!info->resume_bit)
 		goto no_report;
@@ -3173,15 +3610,6 @@ static void fts_enter_pointer_event_handler(struct fts_ts_info *info,
 
 	if (y >= info->board->y_max)
 		y = info->board->y_max;
-#ifdef CONFIG_TOUCHSCREEN_XIAOMI_TOUCHFEATURE
-	info->coor[touchId][0] = x;
-	info->coor[touchId][1] = y;
-/*
-	if (fts_touchmode_edgefilter(touchId, x, y))
-		return;
-*/
-#endif
-
 	input_mt_slot(info->input_dev, touchId);
 	switch (touchType) {
 
@@ -3238,23 +3666,21 @@ static void fts_enter_pointer_event_handler(struct fts_ts_info *info,
 #ifdef CONFIG_FTS_FOD_AREA_REPORT
 		if (fts_is_in_fodarea(x, y) && !(info->fod_id & ~(1 << touchId))) {
 			__set_bit(touchId, &info->sleep_finger);
-			info->fod_x = x;
-			info->fod_y = y;
-			info->fod_coordinate_update = true;
-			__set_bit(touchId, &info->fod_id);
-			input_report_abs(info->input_dev, ABS_MT_WIDTH_MINOR, info->fod_overlap);
-			/**
-			logError(1,	"%s  %s :  FOD Press :%d, fod_id:%08x\n", tag, __func__,
-			touchId, info->fod_id);
-			**/
+			if (fts_fingerprint_is_enable()) {
+				info->fod_x = x;
+				info->fod_y = y;
+				info->fod_coordinate_update = true;
+				__set_bit(touchId, &info->fod_id);
+				input_report_abs(info->input_dev, ABS_MT_WIDTH_MINOR, info->fod_overlap);
+				logError(1,	"%s  %s :  FOD Press :%d, fod_id:%08x\n", tag, __func__, touchId, info->fod_id);
+			}
 		} else if (__test_and_clear_bit(touchId, &info->fod_id)) {
 			input_report_abs(info->input_dev, ABS_MT_WIDTH_MINOR, 0);
 			input_report_key(info->input_dev, BTN_INFO, 0);
-			input_report_key(info->input_dev, KEY_INFO, 0);
+			info->fod_x = 0;
+			info->fod_y = 0;
 			info->fod_coordinate_update = false;
-			info->fod_overlap = 0;
-			logError(1, "%s  %s :  FOD Release :%d\n", tag, __func__,
-					touchId);
+			logError(1, "%s  %s :  FOD Release :%d\n", tag, __func__, touchId);
 			__clear_bit(touchId, &info->sleep_finger);
 		}
 #endif
@@ -3267,6 +3693,33 @@ static void fts_enter_pointer_event_handler(struct fts_ts_info *info,
 		logError(1,
 			"%s  %s :  Event 0x%02x - Press ID[%d] type = %d\n", tag,
 				__func__, event[0], touchId, touchType);
+#ifdef CONFIG_INPUT_PRESS_NDT
+	forcekey_code = fts_forcekey_code_get(x, y);
+	if (forcekey_code != -1) {
+		switch (forcekey_code) {
+		case 0:
+			fts_info->forcekey_bit |= 0x01;
+			break;
+		case 1:
+			fts_info->forcekey_bit |= 0x02;
+			break;
+		case 2:
+			fts_info->forcekey_bit |= 0x04;
+			break;
+		case 3:
+			fts_info->forcekey_bit |= 0x08;
+			break;
+		default:
+			break;
+		}
+		pr_info("FTS:%s key_code:%u key_bit:%u lastkey_bit:%u\n", __func__, forcekey_code, fts_info->forcekey_bit, fts_info->last_forcekey_bit);
+		if (fts_info->last_forcekey_bit != fts_info->forcekey_bit) {
+			ndt_write_tp_info(fts_info->forcekey_bit);
+		}
+		fts_info->last_forcekey_bit = fts_info->forcekey_bit;
+		forcekey_touchid[forcekey_code] = touchId;
+	}
+#endif
 
 #ifndef CONFIG_FTS_FOD_AREA_REPORT
 no_report:
@@ -3289,28 +3742,25 @@ static void fts_leave_pointer_event_handler(struct fts_ts_info *info,
 	int x, y;
 	bool fod_up = false;
 #endif
+#ifdef CONFIG_INPUT_PRESS_NDT
+	int i = 0;
+#endif
 #ifdef CONFIG_FTS_FOD_AREA_REPORT
 	if (event[1] == 0xb5) {
 		touchType = TOUCH_TYPE_FINGER;
-		info->sleep_finger = 0;
-		if (!info->fod_id) {
-			logError(1, "%s  %s :  FOD Release without FOD press\n", tag, __func__);
-			goto exit;
-		}
-		if (info->touch_id) {
-			logError(1, "%s  %s :  FOD Release in active mode\n", tag, __func__);
-			goto exit;
-		}
-		touchId = ffs(info->fod_id) - 1;
+		if (info->fod_id)
+			touchId = ffs(info->fod_id) - 1;
+		else
+			logError(1, "%s %s Fod release report without fod id\n", tag, __func__);
 		info->fod_overlap = 0;
-
-		logError(1,	"%s  %s :  FOD Release :%d, fod_id:%08x\n", tag, __func__,
-			touchId, info->fod_id);
-
-
-		__clear_bit(touchId, &info->fod_id);
+		logError(1,	"%s  %s :  FOD Release :%d, fod_id:%08x\n", tag, __func__, touchId, info->fod_id);
+		/* fod release don't care touch event release in normal mode */
+		if (info->touch_id)
+			goto exit;
+		/* if touch_id is 0, this is said this is from aod, so we should clear info->fod_id */
+		else
+			__clear_bit(touchId, &info->fod_id);
 		fod_up = true;
-
 	} else {
 #endif
 		touchType = event[1] & 0x0F;
@@ -3319,16 +3769,6 @@ static void fts_leave_pointer_event_handler(struct fts_ts_info *info,
 	}
 	x = (event[2] << 4) | (event[4] & 0xF0) >> 4;
 	y = (event[3] << 4) | (event[4] & 0x0F);
-#endif
-#ifdef CONFIG_TOUCHSCREEN_XIAOMI_TOUCHFEATURE
-	info->coor[touchId][0] = -1;
-	info->coor[touchId][1] = -1;
-/*
-	if (test_bit(touchId, &info->touch_skip)) {
-		__clear_bit(touchId, &info->touch_skip);
-		return;
-	}
-*/
 #endif
 	input_mt_slot(info->input_dev, touchId);
 	switch (touchType) {
@@ -3366,28 +3806,24 @@ static void fts_leave_pointer_event_handler(struct fts_ts_info *info,
 		return;
 
 	}
-#ifdef CONFIG_FTS_FOD_AREA_REPORT
 	__clear_bit(touchId, &info->sleep_finger);
 	if (__test_and_clear_bit(touchId, &info->fod_id)) {
-			input_report_abs(info->input_dev, ABS_MT_WIDTH_MINOR, 0);
-			input_report_key(info->input_dev, BTN_INFO, 0);
-			input_report_key(info->input_dev, KEY_INFO, 0);
-			info->fod_coordinate_update = false;
+		input_report_abs(info->input_dev, ABS_MT_WIDTH_MINOR, 0);
+		input_report_key(info->input_dev, BTN_INFO, 0);
+		info->fod_coordinate_update = false;
+		info->fod_x = 0;
+		info->fod_y = 0;
 	}
-#endif
 	input_mt_report_slot_state(info->input_dev, tool, 0);
 	if (info->touch_id == 0) {
 		input_report_key(info->input_dev, BTN_TOUCH, touch_condition);
-		lpm_disable_for_input(false);
 		if (!touch_condition)
 			input_report_key(info->input_dev, BTN_TOOL_FINGER, 0);
-#ifdef CONFIG_FTS_FOD_AREA_REPORT
+
 		info->fod_pressed = false;
-		info->fod_overlap = 0;
 		input_report_key(info->input_dev, BTN_INFO, 0);
-		input_report_key(info->input_dev, KEY_INFO, 0);
 		finger_report_flag = false;
-#endif
+
 
 #ifdef CONFIG_TOUCHSCREEN_XIAOMI_TOUCHFEATURE
 		wake_up(&info->wait_queue);
@@ -3397,21 +3833,46 @@ static void fts_leave_pointer_event_handler(struct fts_ts_info *info,
 		info->fod_id = 0;
 	}
 	input_report_abs(info->input_dev, ABS_MT_TRACKING_ID, -1);
-#ifdef CONFIG_FTS_FOD_AREA_REPORT
 	if (fod_up)
 		logError(1,
 			"%s  %s :  Event FOD - release ID[%d] type = %d\n", tag,
 			__func__, touchId, touchType);
 	else
-#endif
 		logError(1,
 			"%s  %s :  Event 0x%02x - release ID[%d] type = %d\n", tag,
 			__func__, event[0], touchId, touchType);
 
 	input_sync(info->input_dev);
-#ifdef CONFIG_FTS_FOD_AREA_REPORT
-exit:
+#ifdef CONFIG_INPUT_PRESS_NDT
+	for (i = 0; i < 4; i++) {
+		if (touchId == forcekey_touchid[i]) {
+			switch (i) {
+			case 0:
+				fts_info->forcekey_bit &= ~0x01;
+				break;
+			case 1:
+				fts_info->forcekey_bit &= ~0x02;
+				break;
+			case 2:
+				fts_info->forcekey_bit &= ~0x04;
+				break;
+			case 3:
+				fts_info->forcekey_bit &= ~0x08;
+				break;
+			default:
+				break;
+			}
+			pr_info("FTS:forcekey_bit%u:, last_forcekey_bit%u\n", info->forcekey_bit, info->last_forcekey_bit);
+			forcekey_touchid[i] = -1;
+			break;
+		}
+	}
+	if (i <= 4 && info->forcekey_bit != info->last_forcekey_bit) {
+		ndt_write_tp_info(info->forcekey_bit);
+		info->last_forcekey_bit = info->forcekey_bit;
+	}
 #endif
+exit:
 	return;
 }
 
@@ -3474,6 +3935,7 @@ static void fts_controller_ready_event_handler(struct fts_ts_info *info,
 					       unsigned char *event)
 {
 	int error;
+
 	logError(1,
 		 "%s %s Received event %02X %02X %02X %02X %02X %02X %02X %02X\n",
 		 tag, __func__, event[0], event[1], event[2], event[3],
@@ -3724,7 +4186,6 @@ static void fts_gesture_event_handler(struct fts_ts_info *info,
 {
 	int value;
 	int needCoords = 0;
-	char ch[64] = { 0x0, };
 #ifdef CONFIG_FTS_FOD_AREA_REPORT
 	int touch_area;
 	int fod_overlap;
@@ -3740,7 +4201,11 @@ static void fts_gesture_event_handler(struct fts_ts_info *info,
 	if (event[0] == EVT_ID_USER_REPORT && event[1] == EVT_TYPE_USER_GESTURE) {
 		needCoords = 1;
 #ifdef CONFIG_FTS_FOD_AREA_REPORT
-		if (event[2] == GEST_ID_LONG_PRESS && info->fod_status) {
+		if (event[2] == GEST_ID_LONG_PRESS) {
+			if (!fts_fingerprint_is_enable()) {
+				logError(1, "%s %s fingerprint is not enabled,don't need to report fod event\n", tag, __func__);
+				goto gesture_done;
+			}
 			touch_area = (event[9] << 8) | (event[8]);
 			fod_overlap = (event[11] << 8) | (event[10]);
 			if ((!info->sensor_sleep && info->fod_coordinate_update &&
@@ -3755,7 +4220,6 @@ static void fts_gesture_event_handler(struct fts_ts_info *info,
 				if ((info->sensor_sleep && !info->sleep_finger) || !info->sensor_sleep) {
 					info->fod_pressed = true;
 					input_report_key(info->input_dev, BTN_INFO, 1);
-					input_report_key(info->input_dev, KEY_INFO, 1);
 					input_sync(info->input_dev);
 					if (info->fod_id) {
 						fod_id = ffs(info->fod_id) - 1;
@@ -3781,16 +4245,15 @@ static void fts_gesture_event_handler(struct fts_ts_info *info,
 						}
 						input_report_abs(info->input_dev, ABS_MT_WIDTH_MAJOR, touch_area);
 						input_report_abs(info->input_dev, ABS_MT_WIDTH_MINOR, fod_overlap);
-						/**
-						logError(1, "%s %s id:%d, fod_id:%08x, touch_area:%d, overlap:%d,fod report\n",
-										tag, __func__, fod_id, info->fod_id, touch_area, fod_overlap);
-						**/
+						logError(1, "%s %s id:%d touch_area:%d, overlap:%d,fod report\n",
+										tag, __func__, fod_id, touch_area, fod_overlap);
 					}
 					input_sync(info->input_dev);
 				}
-			}
-				goto gesture_done;
-		} else if (event[2] == GEST_ID_SINGTAP && info->fod_status) {
+			} else if (info->sensor_sleep)
+				__clear_bit(0, &info->fod_id);
+			goto gesture_done;
+		} else if (event[2] == GEST_ID_SINGTAP) {
 			input_report_key(info->input_dev, KEY_GOTO, 1);
 			input_sync(info->input_dev);
 			input_report_key(info->input_dev, KEY_GOTO, 0);
@@ -3807,8 +4270,6 @@ static void fts_gesture_event_handler(struct fts_ts_info *info,
 				goto gesture_done;
 			value = KEY_WAKEUP;
 			logError(0, "%s %s: double tap ! \n", tag, __func__);
-			info->dbclick_count++;
-			snprintf(ch, sizeof(ch), "%d", info->dbclick_count);
 			needCoords = 0;
 			break;
 
@@ -4040,7 +4501,6 @@ static void fts_ts_sleep_work(struct work_struct *work)
 			logError(1, "%s pm_resume_completion timeout, i2c is closed", tag);
 			pm_relax(info->dev);
 			fts_enableInterrupt();
-			lpm_disable_for_input(false);
 			return;
 		} else {
 			logError(1, "%s pm_resume_completion be completed, handling irq", tag);
@@ -4095,7 +4555,7 @@ static void fts_ts_sleep_work(struct work_struct *work)
 #endif
 	pm_relax(info->dev);
 	fts_enableInterrupt();
-	lpm_disable_for_input(false);
+
 	return;
 }
 
@@ -4133,7 +4593,6 @@ static irqreturn_t fts_event_handler(int irq, void *ts_info)
 		return IRQ_HANDLED;
 	}
 #endif
-	lpm_disable_for_input(true);
 
 	info->irq_status = true;
 	error = fts_writeReadU8UX(regAdd, 0, 0, data, FIFO_EVENT_SIZE,
@@ -4178,8 +4637,6 @@ static irqreturn_t fts_event_handler(int irq, void *ts_info)
 	}
 	input_sync(info->input_dev);
 	info->irq_status = false;
-	if (!info->touch_id)
-		lpm_disable_for_input(false);
 #ifdef CONFIG_TOUCHSCREEN_XIAOMI_TOUCHFEATURE
 	wake_up(&info->wait_queue);
 #endif
@@ -4198,6 +4655,7 @@ static const char *fts_get_config(struct fts_ts_info *info)
 	if (ret < OK) {
 		logError(1, "%s can't read lockdown info", tag);
 		return pdata->default_fw_name;
+#endif
 	}
 
 	ret |= fts_enableInterrupt();
@@ -4679,6 +5137,7 @@ static int fts_mode_handler(struct fts_ts_info *info, int force)
 	u8 single_only_cmd[4] = {0xC0, 0x02, 0x00, 0x00};
 	u8 single_double_cmd[4] = {0xC0, 0x02, 0x01, 0x1E};
 #endif
+
 #ifdef CONFIG_FTS_FOD_AREA_REPORT
 	mutex_lock(&info->fod_mutex);
 #endif
@@ -4688,8 +5147,7 @@ static int fts_mode_handler(struct fts_ts_info *info, int force)
 	case 0:
 		logError(0, "%s %s: Screen OFF... \n", tag, __func__);
 
-#ifdef CONFIG_FTS_FOD_AREA_REPORT
-		if (info->fod_status) {
+		if (fts_need_enter_lp_mode()) {
 			logError(1, "%s %s: Sense OFF by FOD \n", tag, __func__);
 			logError(1, "%s %s,send long press and gesture cmd\n", tag, __func__);
 			res = fts_write_dma_safe(gesture_cmd, ARRAY_SIZE(gesture_cmd));
@@ -4707,9 +5165,7 @@ static int fts_mode_handler(struct fts_ts_info *info, int force)
 				if (res < OK)
 						logError(1, "%s %s: set single only delay time failed! ERROR %08X\n", tag, __func__, res);
 			}
-			info->fod_status_set = true;
 		} else {
-#endif
 			logError(1, "%s %s: Sense OFF! \n", tag, __func__);
 			ret = setScanMode(SCAN_MODE_ACTIVE, 0x00);
 			res |= ret;
@@ -4729,7 +5185,6 @@ static int fts_mode_handler(struct fts_ts_info *info, int force)
 						 tag, __func__, res);
 				}
 			}
-			info->fod_status_set = false;
 #ifdef CONFIG_FTS_FOD_AREA_REPORT
 		}
 #endif
@@ -4738,7 +5193,6 @@ static int fts_mode_handler(struct fts_ts_info *info, int force)
 
 	case 1:
 		logError(1, "%s %s: Screen ON... \n", tag, __func__);
-		info->fod_ok = 0;
 
 #ifdef GLOVE_MODE
 		if ((info->glove_enabled == FEAT_ENABLE && isSystemResettedUp())
@@ -4861,13 +5315,10 @@ static int fts_mode_handler(struct fts_ts_info *info, int force)
 			res |= setScanMode(SCAN_MODE_ACTIVE, 0x01);
 		}
 		info->sensor_scan = true;
-		if (info->fod_status) {
-			res = fts_write_dma_safe(gesture_cmd, ARRAY_SIZE(gesture_cmd));
-			if (res < OK)
-					logError(1, "%s %s: enter gesture and longpress failed! ERROR %08X recovery in senseOff...\n",
-						 tag, __func__, res);
-			info->fod_status_set = true;
-		}
+		res = fts_write_dma_safe(gesture_cmd, ARRAY_SIZE(gesture_cmd));
+		if (res < OK)
+				logError(1, "%s %s: enter gesture and longpress failed! ERROR %08X recovery in senseOff...\n",
+					 tag, __func__, res);
 #else
 		settings[0] = 0x01;
 		logError(1, "%s %s: Sense ON! \n", tag, __func__);
@@ -4897,72 +5348,6 @@ static int fts_mode_handler(struct fts_ts_info *info, int force)
 #ifdef CONFIG_TOUCHSCREEN_XIAOMI_TOUCHFEATURE
 static struct xiaomi_touch_interface xiaomi_touch_interfaces;
 
-bool inline fts_touchmode_edgefilter(unsigned int touch_id, int x, int y)
-{
-	int i;
-	bool top_half = false;
-
-	const struct fts_hw_platform_data *bdata = fts_info->board;
-	int filter_size = 0;
-
-	switch (xiaomi_touch_interfaces.touch_mode[Touch_Edge_Filter][GET_CUR_VALUE]) {
-		case 0:
-			filter_size = 0;
-			break;
-		case 1:
-			filter_size = 100;
-			break;
-		case 2:
-			filter_size = 150;
-			break;
-		case 3:
-			filter_size = 250;
-			break;
-		default:
-			filter_size = 0;
-			logError(1,
-			 "%s %s: no support value %08d\n",
-			 tag, __func__, filter_size);
-			break;
-	}
-
-	if (!filter_size)
-		return false;
-
-	if (test_bit(touch_id, &fts_info->touch_skip)) {
-		logError(1, "%s %s: skip mask finger:%d, %x\n",
-					tag, __func__, touch_id, fts_info->touch_skip);
-		return true;
-	} else if ((x >= 0 && x < filter_size) && ((y >= 0 && y < filter_size) ||
-			(y > bdata->y_max - filter_size && y < bdata->y_max))) {
-
-		if (y >= 0 && y < filter_size) {
-			top_half = true;
-		} else {
-			top_half = false;
-		}
-
-		for (i = 0; i < TOUCH_ID_MAX; i++) {
-			if ((i == touch_id) || (!test_bit(i, &fts_info->touch_id)))
-				continue;
-			if ((fts_info->coor[i][1] > (int)(bdata->y_max / 2) && top_half) ||
-				(fts_info->coor[i][1] < (int)(bdata->y_max / 2) &&
-				fts_info->coor[i][1] >= 0 && !top_half)) {
-				return false;
-			}
-		}
-
-		if (!test_bit(touch_id, &fts_info->touch_id) && fts_info->touch_id != 0) {
-			__set_bit(touch_id, &fts_info->touch_skip);
-			logError(1, "%s %s: skip mask first finger:%d, touch_id:%x, touch_skip:%0x\n",
-					tag, __func__, touch_id, fts_info->touch_id, fts_info->touch_skip);
-			return true;
-		}
-	}
-
-	return false;
-}
-
 int fts_read_touchmode_data(void)
 {
 	int ret = 0;
@@ -4978,7 +5363,7 @@ int fts_read_touchmode_data(void)
 		logError(1,
 			 "%s %s: error while reading touchmode data ERROR %08X\n",
 			 tag, __func__, ret);
-		return -1;
+		return -EIO;
 	}
 	ret = fts_writeRead_dma_safe(grip_cmd, sizeof(grip_cmd) / sizeof(u8), grip_value,
 			     readBytes);
@@ -4986,7 +5371,7 @@ int fts_read_touchmode_data(void)
 		logError(1,
 			 "%s %s: error while reading edge filter data ERROR %08X\n",
 			 tag, __func__, ret);
-		return -1;
+		return -EIO;
 	}
 
 	for (i = 0; i < Touch_Mode_NUM; i++) {
@@ -5015,6 +5400,13 @@ int fts_read_touchmode_data(void)
 static void fts_init_touchmode_data(void)
 {
 	int i;
+	struct fts_hw_platform_data *bdata = NULL;
+
+	if (!fts_info) {
+		logError(1, "%s %s fts_info not init\n", tag, __func__);
+		return;
+	} else
+		bdata = fts_info->board;
 
 	/* default value should equl the first initial value */
 	for (i = 0; i < Touch_Mode_NUM; i++) {
@@ -5034,19 +5426,18 @@ static void fts_init_touchmode_data(void)
 	xiaomi_touch_interfaces.touch_mode[Touch_Active_MODE][GET_DEF_VALUE] = 0;
 
 	/* finger hysteresis */
-	xiaomi_touch_interfaces.touch_mode[Touch_UP_THRESHOLD][GET_DEF_VALUE] = 80;
-	xiaomi_touch_interfaces.touch_mode[Touch_UP_THRESHOLD][SET_CUR_VALUE] = 80;
-	xiaomi_touch_interfaces.touch_mode[Touch_UP_THRESHOLD][GET_CUR_VALUE] = 80;
-	xiaomi_touch_interfaces.touch_mode[Touch_UP_THRESHOLD][GET_MAX_VALUE] = 120;
-	xiaomi_touch_interfaces.touch_mode[Touch_UP_THRESHOLD][GET_MIN_VALUE] = 40;
+	xiaomi_touch_interfaces.touch_mode[Touch_UP_THRESHOLD][GET_DEF_VALUE] = bdata->touch_up_threshold_def;
+	xiaomi_touch_interfaces.touch_mode[Touch_UP_THRESHOLD][SET_CUR_VALUE] = bdata->touch_up_threshold_def;
+	xiaomi_touch_interfaces.touch_mode[Touch_UP_THRESHOLD][GET_CUR_VALUE] = bdata->touch_up_threshold_def;
+	xiaomi_touch_interfaces.touch_mode[Touch_UP_THRESHOLD][GET_MAX_VALUE] = bdata->touch_up_threshold_max;
+	xiaomi_touch_interfaces.touch_mode[Touch_UP_THRESHOLD][GET_MIN_VALUE] = bdata->touch_up_threshold_min;
 
 	/*  Tolerance */
-	xiaomi_touch_interfaces.touch_mode[Touch_Tolerance][GET_DEF_VALUE] = 25;
-	xiaomi_touch_interfaces.touch_mode[Touch_Tolerance][GET_MAX_VALUE] = 35;
-	xiaomi_touch_interfaces.touch_mode[Touch_Tolerance][GET_MIN_VALUE] = 5;
-	xiaomi_touch_interfaces.touch_mode[Touch_Tolerance][SET_CUR_VALUE] = 25;
-	xiaomi_touch_interfaces.touch_mode[Touch_Tolerance][GET_CUR_VALUE] = 25;
-
+	xiaomi_touch_interfaces.touch_mode[Touch_Tolerance][GET_DEF_VALUE] = bdata->touch_tolerance_def;
+	xiaomi_touch_interfaces.touch_mode[Touch_Tolerance][SET_CUR_VALUE] = bdata->touch_tolerance_def;
+	xiaomi_touch_interfaces.touch_mode[Touch_Tolerance][GET_CUR_VALUE] = bdata->touch_tolerance_def;
+	xiaomi_touch_interfaces.touch_mode[Touch_Tolerance][GET_MAX_VALUE] = bdata->touch_tolerance_max;
+	xiaomi_touch_interfaces.touch_mode[Touch_Tolerance][GET_MIN_VALUE] = bdata->touch_tolerance_min;
 	/*	Wgh Min */
 	xiaomi_touch_interfaces.touch_mode[Touch_Wgh_Min][GET_DEF_VALUE] = 1;
 	xiaomi_touch_interfaces.touch_mode[Touch_Wgh_Min][GET_CUR_VALUE] = 1;
@@ -5068,7 +5459,7 @@ static void fts_init_touchmode_data(void)
 	xiaomi_touch_interfaces.touch_mode[Touch_Wgh_Step][GET_MAX_VALUE] = 2;
 	xiaomi_touch_interfaces.touch_mode[Touch_Wgh_Step][GET_MIN_VALUE] = 0;
 
-	/*	edge filter */
+	/*	edge filter level*/
 	xiaomi_touch_interfaces.touch_mode[Touch_Edge_Filter][GET_MAX_VALUE] = 3;
 	xiaomi_touch_interfaces.touch_mode[Touch_Edge_Filter][GET_MIN_VALUE] = 0;
 	xiaomi_touch_interfaces.touch_mode[Touch_Edge_Filter][GET_DEF_VALUE] = 2;
@@ -5081,6 +5472,13 @@ static void fts_init_touchmode_data(void)
 	xiaomi_touch_interfaces.touch_mode[Touch_Panel_Orientation][GET_DEF_VALUE] = 0;
 	xiaomi_touch_interfaces.touch_mode[Touch_Panel_Orientation][SET_CUR_VALUE] = 0;
 	xiaomi_touch_interfaces.touch_mode[Touch_Panel_Orientation][GET_CUR_VALUE] = 0;
+
+	/*	enter idle time */
+	xiaomi_touch_interfaces.touch_mode[Touch_Idle_Time][GET_MAX_VALUE] = bdata->touch_idletime_max;
+	xiaomi_touch_interfaces.touch_mode[Touch_Idle_Time][GET_MIN_VALUE] = bdata->touch_idletime_min;
+	xiaomi_touch_interfaces.touch_mode[Touch_Idle_Time][GET_DEF_VALUE] = bdata->touch_idletime_def;
+	xiaomi_touch_interfaces.touch_mode[Touch_Idle_Time][SET_CUR_VALUE] = bdata->touch_idletime_def;
+	xiaomi_touch_interfaces.touch_mode[Touch_Idle_Time][GET_CUR_VALUE] = bdata->touch_idletime_def;
 
 	for (i = 0; i < Touch_Mode_NUM; i++) {
 		logError(1,
@@ -5096,21 +5494,30 @@ static void fts_init_touchmode_data(void)
 
 	return;
 }
-#define EDGE_OF_LEFTRIGHT 45
-#define EDGE_OF_TOPBOTTOM 0
-static void fts_edge_rejection(bool on, int value)
+
+static void fts_edge_rejection(bool on, int top, int bottom)
 {
 	/* the fixed edge_reject is 65 */
 	int ret = 0;
 	u8 edge_of_leftright[4] = {0xc0, 0x01, 0x00, 0x00};
-	u8 edge_of_topbottom[4] = {0xc0, 0x01, 0x01, 0x00};
+	u8 edge_of_top[4] = {0xc0, 0x01, 0x02, 0x00};
+	u8 edge_of_bottom[4] = {0xc0, 0x01, 0x03, 0x00};
+	struct fts_hw_platform_data *pdata = NULL;
+
+	if (!fts_info) {
+		logError(1, "%s %s fts_info not init\n", tag, __func__);
+		return;
+	} else
+		pdata = fts_info->board;
 
 	if (on) {
-		edge_of_topbottom[3] = value;
+		edge_of_top[3] = top;
+		edge_of_bottom[3] = bottom;
 		edge_of_leftright[3] = 0;
 	} else {
-		edge_of_leftright[3] = EDGE_OF_LEFTRIGHT;
-		edge_of_topbottom[3] = EDGE_OF_TOPBOTTOM;
+		edge_of_leftright[3] = pdata->edgefilter_leftright_def;
+		edge_of_top[3] = pdata->edgefilter_topbottom_def;
+		edge_of_bottom[3] = pdata->edgefilter_topbottom_def;
 	}
 
 	ret = fts_write_dma_safe(edge_of_leftright, sizeof(edge_of_leftright) / sizeof(u8));
@@ -5121,16 +5528,48 @@ static void fts_edge_rejection(bool on, int value)
 		return;
 	}
 
-	ret = fts_write_dma_safe(edge_of_topbottom, sizeof(edge_of_topbottom) / sizeof(u8));
+	ret = fts_write_dma_safe(edge_of_top, sizeof(edge_of_top) / sizeof(u8));
 	if (ret < OK) {
 		logError(1,
 			 "%s %s: error while writing edge top/bottom data ERROR %08X\n",
 			 tag, __func__, ret);
 		return;
 	}
-	logError(1, "%s %s: on:%d, value:%d\n",
-				 tag, __func__, on, value);
+	ret = fts_write_dma_safe(edge_of_bottom, sizeof(edge_of_bottom) / sizeof(u8));
+	if (ret < OK) {
+		logError(1,
+			 "%s %s: error while writing edge top/bottom data ERROR %08X\n",
+			 tag, __func__, ret);
+		return;
+	}
+	logError(1, "%s %s: on:%d, top:%d, bottom:%d\n", tag, __func__, on, top, bottom);
 
+	return;
+}
+
+static void fts_update_enter_idle_time(void)
+{
+	u8 set_cmd[4] = {0xc0, 0x00, 0x00, 0x00};
+	int ret = 0;
+	/*touch idle time = reg_value * 5 * 10 ms*/
+	u8 value = 0;
+
+	if (!fts_info) {
+		logError(1, "%s %s fts_info not inited\n", tag, __func__);
+		return;
+	}
+	if (fts_info->gamemode_enable) {
+		logError(1, "%s %s is in gamemode, set idle time to default value\n", tag, __func__);
+		value = (xiaomi_touch_interfaces.touch_mode)[Touch_Idle_Time][GET_DEF_VALUE] / 50;
+	} else
+		value = (xiaomi_touch_interfaces.touch_mode)[Touch_Idle_Time][SET_CUR_VALUE] / 50;
+	set_cmd[3] = value;
+	ret = fts_write_dma_safe(set_cmd, sizeof(set_cmd) / sizeof(u8));
+	if (ret < OK) {
+		logError(1,
+			 "%s %s: error while writing enter idle time ERROR %08X\n", tag, __func__, ret);
+	} else
+		logError(1, "%s %s write enter idle time to :%d\n", tag, __func__, value);
 	return;
 }
 
@@ -5143,29 +5582,36 @@ static void fts_update_grip_mode(void)
 	int temp_value = 0;
 	bool topbottom_edge_filter = false;
 	int direction = 0;
+	struct fts_hw_platform_data *pdata = NULL;
+
+	if (!fts_info) {
+		logError(1, "%s %s fts_info not init\n", tag, __func__);
+		return;
+	} else
+		pdata = fts_info->board;
 
 	logError(1,
 			 "%s %s: value:%d\n",
 			 tag, __func__, xiaomi_touch_interfaces.touch_mode[Touch_Edge_Filter][SET_CUR_VALUE]);
 	switch (xiaomi_touch_interfaces.touch_mode[Touch_Edge_Filter][SET_CUR_VALUE]) {
-		case 0:
-			temp_value = 0;
-			break;
-		case 1:
-			temp_value = 100;
-			break;
-		case 2:
-			temp_value = 170;
-			break;
-		case 3:
-			temp_value = 250;
-			break;
-		default:
-			temp_value = 0;
-			logError(1,
-			 "%s %s: no support value %08d\n",
-			 tag, __func__, temp_value);
-			break;
+	case 0:
+		temp_value = 0;
+		break;
+	case 1:
+		temp_value = pdata->edgefilter_area_step1;
+		break;
+	case 2:
+		temp_value = pdata->edgefilter_area_step2;
+		break;
+	case 3:
+		temp_value = pdata->edgefilter_area_step3;
+		break;
+	default:
+		temp_value = 0;
+		logError(1,
+		 "%s %s: no support value %08d\n",
+		 tag, __func__, temp_value);
+		break;
 	}
 
 	direction = xiaomi_touch_interfaces.touch_mode[Touch_Panel_Orientation][SET_CUR_VALUE];
@@ -5212,9 +5658,9 @@ static void fts_update_grip_mode(void)
 		logError(1,
 			 "%s %s: touch game mode off or portrait\n",
 			 tag, __func__);
-		fts_edge_rejection(false, 0);
+		fts_edge_rejection(false, 0, 0);
 	} else
-		fts_edge_rejection(true, 0);
+		fts_edge_rejection(true, pdata->edgefilter_top_ingamemode, pdata->edgefilter_bottom_ingamemode);
 
 	xiaomi_touch_interfaces.touch_mode[Touch_Edge_Filter][GET_CUR_VALUE] =
 		xiaomi_touch_interfaces.touch_mode[Touch_Edge_Filter][SET_CUR_VALUE];
@@ -5324,6 +5770,7 @@ static void fts_update_touchmode_data(void)
 			tag, __func__, get_value[0], get_value[1], get_value[2], get_value[3],
 			get_value[4], get_value[5], get_value[6]);
 		fts_update_grip_mode();
+		fts_update_enter_idle_time();
 	} else {
 		logError(1, "%s %s: no update\n", tag, __func__);
 	}
@@ -5340,8 +5787,38 @@ static void fts_cmd_update_work(struct work_struct *work)
 	return;
 }
 
+static int fts_set_fod_status(int value)
+{
+	int res = 0;
+	u8 gesture_cmd[6] = {0xA2, 0x03, 0x20, 0x00, 0x00, 0x01};
+
+	fts_info->fod_status = value;
+	if (fts_info->fod_status == 2) {
+		mutex_lock(&fts_info->fod_mutex);
+		res = fts_write(gesture_cmd, ARRAY_SIZE(gesture_cmd));
+		if (res < OK)
+			logError(1, "%s %s: enter gesture and longpress failed! ERROR %08X recovery in senseOff...\n",
+			tag, __func__, res);
+		else
+			logError(1, "%s %s send gesture and longpress cmd success\n", tag, __func__);
+		mutex_unlock(&fts_info->fod_mutex);
+	}
+	return res;
+}
+
+static int fts_set_aod_status(int value)
+{
+	fts_info->aod_status = value;
+	return 0;
+}
+
 static int fts_set_cur_value(int mode, int value)
 {
+
+	if (mode == Touch_Fod_Enable && fts_info && value >= 0)
+		return fts_set_fod_status(value);
+	if (mode == Touch_Aod_Enable && fts_info && value >= 0)
+		return fts_set_aod_status(value);
 
 	if (mode < Touch_Mode_NUM && mode >= 0) {
 
@@ -5359,10 +5836,11 @@ static int fts_set_cur_value(int mode, int value)
 		xiaomi_touch_interfaces.touch_mode[mode][SET_CUR_VALUE] =
 				xiaomi_touch_interfaces.touch_mode[mode][GET_MIN_VALUE];
 		}
+		if (fts_info && mode == Touch_Game_Mode && value >= 0)
+			fts_info->gamemode_enable = value > 0 ? true : false;
 	} else {
 		logError(1, "%s %s, don't support\n", tag, __func__);
 	}
-	logError(1, "%s %s, mode:%d, value:%d\n", tag, __func__, mode, value);
 
 	queue_work(fts_info->touch_feature_wq, &fts_info->cmd_update_work);
 
@@ -5409,6 +5887,7 @@ static int fts_reset_mode(int mode)
 			xiaomi_touch_interfaces.touch_mode[i][SET_CUR_VALUE] =
 			xiaomi_touch_interfaces.touch_mode[i][GET_DEF_VALUE];
 		}
+		fts_info->gamemode_enable = false;
 	} else {
 		logError(1, "%s %s, don't support\n", tag, __func__);
 	}
@@ -5487,7 +5966,9 @@ int fts_palm_sensor_cmd(int on)
 int fts_palm_sensor_write(int value)
 {
 	int ret = 0;
+#ifdef CONFIG_SECURE_TOUCH
 	struct fts_secure_info *scr_info = fts_info->secure_info;
+#endif
 
 	fts_info->palm_sensor_switch = value;
 
@@ -5496,6 +5977,7 @@ int fts_palm_sensor_write(int value)
 		return 0;
 	}
 
+#ifdef CONFIG_SECURE_TOUCH
 	mutex_lock(&scr_info->palm_lock);
 	if (atomic_read(&scr_info->st_enabled)) {
 		if (!scr_info->scr_delay.palm_pending) {
@@ -5505,13 +5987,46 @@ int fts_palm_sensor_write(int value)
 			logError(1, "%s already pending,skip", tag);
 		}
 	} else {
+#endif
 		ret = fts_palm_sensor_cmd(value);
 		if (!ret)
 			fts_info->palm_sensor_changed = true;
+#ifdef CONFIG_SECURE_TOUCH
 	}
 	mutex_unlock(&scr_info->palm_lock);
+#endif
 
 	return ret;
+}
+
+
+static u8 fts_panel_vendor_read(void)
+{
+	if (fts_info)
+		return fts_info->lockdown_info[0];
+	else
+		return 0;
+}
+
+static u8 fts_panel_color_read(void)
+{
+	if (fts_info)
+		return fts_info->lockdown_info[2];
+	else
+		return 0;
+}
+
+static u8 fts_panel_display_read(void)
+{
+	if (fts_info)
+		return fts_info->lockdown_info[1];
+	else
+		return 0;
+}
+
+static char fts_touch_vendor_read(void)
+{
+	return '2';
 }
 #endif
 /**
@@ -5520,22 +6035,35 @@ int fts_palm_sensor_write(int value)
 static void fts_resume_work(struct work_struct *work)
 {
 	struct fts_ts_info *info;
-
+#ifdef CONFIG_FACTORY_BUILD
+	int retval = 0;
+#endif
 	info = container_of(work, struct fts_ts_info, resume_work);
+#ifndef CONFIG_FACTORY_BUILD
 	fts_disableInterrupt();
 #ifdef CONFIG_SECURE_TOUCH
 	fts_secure_stop(info, true);
 #endif
+#else
+	retval = fts_enable_reg(info, true);
+	if (retval < 0) {
+		logError(1, "%s %s: ERROR Failed to enable regulators\n", tag,
+		__func__);
+	}
+#endif
 	info->resume_bit = 1;
+#ifndef CONFIG_FACTORY_BUILD
 #ifdef CONFIG_FTS_FOD_AREA_REPORT
 	if (!info->fod_pressed) {
 #endif
+#endif
 	fts_system_reset();
 	release_all_touches(info);
+#ifndef CONFIG_FACTORY_BUILD
 #ifdef CONFIG_FTS_FOD_AREA_REPORT
 	}
 #endif
-	info->fod_status_set = false;
+#endif
 	fts_mode_handler(info, 0);
 	info->sensor_sleep = false;
 	info->sleep_finger = 0;
@@ -5555,6 +6083,9 @@ static void fts_resume_work(struct work_struct *work)
 static void fts_suspend_work(struct work_struct *work)
 {
 	struct fts_ts_info *info;
+#ifdef CONFIG_FACTORY_BUILD
+	int retval = 0;
+#endif
 
 	info = container_of(work, struct fts_ts_info, suspend_work);
 #ifdef CONFIG_SECURE_TOUCH
@@ -5575,14 +6106,20 @@ static void fts_suspend_work(struct work_struct *work)
 	release_all_touches(info);
 
 	info->sensor_sleep = true;
-
-	if (info->gesture_enabled || info->fod_status)
+#ifdef CONFIG_FACTORY_BUILD
+	retval = fts_enable_reg(info, false);
+	if (retval < 0) {
+		logError(1, "%s %s: ERROR Failed to enable regulators\n", tag,
+			__func__);
+	}
+#else
+	if (info->gesture_enabled || fts_need_enter_lp_mode())
 		fts_enableInterrupt();
+#endif
 #ifdef CONFIG_FTS_TOUCH_COUNT_DUMP
 	sysfs_notify(&fts_info->fts_touch_dev->kobj, NULL,
 		     "touch_suspend_notify");
 #endif
-	lpm_disable_for_input(false);
 }
 
 #ifdef CONFIG_DRM
@@ -5649,8 +6186,7 @@ static int fts_bl_state_chg_callback(struct notifier_block *nb,
 		blank = *(int *)(data);
 		logError(1, "%s %s: val:%lu,blank:%u\n", tag, __func__, val, blank);
 		flush_workqueue(info->event_wq);
-		if (blank == BACKLIGHT_OFF && (info->fod_status_set &&
-		!info->sensor_sleep && !info->touch_id)) {
+		if (blank == BACKLIGHT_OFF && (!info->sensor_sleep && !info->touch_id)) {
 #ifdef CONFIG_TOUCHSCREEN_XIAOMI_TOUCHFEATURE
 			if (info->p_sensor_switch) {
 				logError(1, "%s eardet enabled, skip disableirq\n", tag, __func__);
@@ -5666,13 +6202,13 @@ static int fts_bl_state_chg_callback(struct notifier_block *nb,
 			flushFIFO();
 			release_all_touches(info);
 			if (ret < OK)
-				logError(1, "%s fts_disableInterrupt ERROR %08X\n", tag, ret | ERROR_ENABLE_INTER);
+				logError(1, "%s fts_disableInterrupt Error %08X\n", tag, ret | ERROR_ENABLE_INTER);
 		} else if (blank == BACKLIGHT_ON) {
 			logError(1, "%s %s: BL_EVENT_UNBLANK\n", tag, __func__);
 			if (!info->sensor_sleep) {
 				ret = fts_enableInterrupt();
 				if (ret < OK)
-					logError(1, "%s fts_enableInterrupt ERROR %08X\n", tag, ret | ERROR_ENABLE_INTER);
+					logError(1, "%s fts_enableInterrupt Error %08X\n", tag, ret | ERROR_ENABLE_INTER);
 			if (!info->sensor_scan)
 				setScanMode(SCAN_MODE_ACTIVE, 0x01);
 			}
@@ -5903,6 +6439,106 @@ err_pinctrl_get:
 	return retval;
 }
 
+#ifdef CONFIG_TOUCHSCREEN_XIAOMI_TOUCHFEATURE
+static int parse_gamemode_dt(struct device *dev, struct fts_hw_platform_data *bdata)
+{
+	int retval;
+	u32 temp_val;
+	struct device_node *np = dev->of_node;
+
+	retval = of_property_read_u32(np, "fts,touch-up-threshold-min", &temp_val);
+	if (retval < 0)
+		return retval;
+	else
+		bdata->touch_up_threshold_min = temp_val;
+	retval = of_property_read_u32(np, "fts,touch-up-threshold-max", &temp_val);
+	if (retval < 0)
+		return retval;
+	else
+		bdata->touch_up_threshold_max = temp_val;
+	retval = of_property_read_u32(np, "fts,touch-up-threshold-def", &temp_val);
+	if (retval < 0)
+		return retval;
+	else
+		bdata->touch_up_threshold_def = temp_val;
+
+	retval = of_property_read_u32(np, "fts,touch-tolerance-min", &temp_val);
+	if (retval < 0)
+		return retval;
+	else
+		bdata->touch_tolerance_min = temp_val;
+	retval = of_property_read_u32(np, "fts,touch-tolerance-max", &temp_val);
+	if (retval < 0)
+		return retval;
+	else
+		bdata->touch_tolerance_max = temp_val;
+	retval = of_property_read_u32(np, "fts,touch-tolerance-def", &temp_val);
+	if (retval < 0)
+		return retval;
+	else
+		bdata->touch_tolerance_def = temp_val;
+
+	retval = of_property_read_u32(np, "fts,edgefilter-leftrigt-def", &temp_val);
+	if (retval < 0)
+		return retval;
+	else
+		bdata->edgefilter_leftright_def = temp_val;
+
+	retval = of_property_read_u32(np, "fts,edgefilter-topbottom-def", &temp_val);
+	if (retval < 0)
+		return retval;
+	else
+		bdata->edgefilter_topbottom_def = temp_val;
+
+	retval = of_property_read_u32(np, "fts,edgefilter-top-ingamemode", &temp_val);
+	if (retval < 0)
+		return retval;
+	else
+		bdata->edgefilter_top_ingamemode = temp_val;
+
+	retval = of_property_read_u32(np, "fts,edgefilter-bottom-ingamemode", &temp_val);
+	if (retval < 0)
+		return retval;
+	else
+		bdata->edgefilter_bottom_ingamemode = temp_val;
+
+	retval = of_property_read_u32(np, "fts,edgefilter-area-step1", &temp_val);
+	if (retval < 0)
+		return retval;
+	else
+		bdata->edgefilter_area_step1 = temp_val;
+
+	retval = of_property_read_u32(np, "fts,edgefilter-area-step2", &temp_val);
+	if (retval < 0)
+		return retval;
+	else
+		bdata->edgefilter_area_step2 = temp_val;
+	retval = of_property_read_u32(np, "fts,edgefilter-area-step3", &temp_val);
+	if (retval < 0)
+		return retval;
+	else
+		bdata->edgefilter_area_step3 = temp_val;
+
+	retval = of_property_read_u32(np, "fts,touch-idletime-min", &temp_val);
+	if (retval < 0)
+		return retval;
+	else
+		bdata->touch_idletime_min = temp_val;
+	retval = of_property_read_u32(np, "fts,touch-idletime-max", &temp_val);
+	if (retval < 0)
+		return retval;
+	else
+		bdata->touch_idletime_max = temp_val;
+	retval = of_property_read_u32(np, "fts,touch-idletime-def", &temp_val);
+	if (retval < 0)
+		return retval;
+	else
+		bdata->touch_idletime_def = temp_val;
+	return retval;
+
+}
+#endif
+
 /**
  * Retrieve and parse the hw information from the device tree node defined in the system.
  * the most important information to obtain are: IRQ and RESET gpio numbers, power regulator names
@@ -5967,6 +6603,11 @@ static int parse_dt(struct device *dev, struct fts_hw_platform_data *bdata)
 		bdata->y_max = temp_val;
 	retval = of_property_read_string(np, "fts,default-fw-name",
 					 &bdata->default_fw_name);
+#ifdef CONFIG_TOUCHSCREEN_XIAOMI_TOUCHFEATURE
+	retval = parse_gamemode_dt(dev, bdata);
+	if (retval < 0)
+		logError(1, "%s Unable to parse gamemode parameters\n", tag);
+#endif
 
 #ifdef CONFIG_FTS_TOUCH_COUNT_DUMP
 	bdata->dump_click_count =
@@ -6069,7 +6710,6 @@ static void fts_switch_mode_work(struct work_struct *work)
 	static const char *fts_gesture_on = "01 20";
 	char *gesture_result;
 	int size = 6 * 2 + 1;
-	char ch[16] = { 0x0, };
 
 	logError(1, "%s %s mode:%d\n", tag, __func__, value);
 
@@ -6093,9 +6733,6 @@ static void fts_switch_mode_work(struct work_struct *work)
 				gesture_result = NULL;
 			}
 		}
-		snprintf(ch, sizeof(ch), "%s",
-			 (value -
-			  INPUT_EVENT_WAKUP_MODE_OFF) ? "enabled" : "disabled");
 	} else if (value >= INPUT_EVENT_COVER_MODE_OFF
 		   && value <= INPUT_EVENT_COVER_MODE_ON) {
 		info->glove_enabled = value - INPUT_EVENT_COVER_MODE_OFF;
@@ -6209,7 +6846,7 @@ static int fts_short_open_test(void)
 #else
 	selftests.MutualKeyCxTotal = 0;
 #endif
-	selftests.SelfForceRaw= 1;
+	selftests.SelfForceRaw = 1;
 	selftests.SelfForceRawGap = 0;
 	selftests.SelfForceRawLP = 0;
 	selftests.SelfForceRawGapLP = 0;
@@ -6330,11 +6967,11 @@ static ssize_t fts_datadump_read(struct file *file, char __user *buf,
 	if (*pos != 0)
 		return 0;
 
-	tmp = vmalloc(PAGE_SIZE * 2);
+	tmp = vmalloc(PAGE_SIZE * 3);
 	if (tmp == NULL)
 		return 0;
 	else
-		memset(tmp, 0, PAGE_SIZE * 2);
+		memset(tmp, 0, PAGE_SIZE * 3);
 
 	cnt1 = fts_strength_frame_show(fts_info->dev, NULL, tmp);
 	if (cnt1 == 0) {
@@ -6443,7 +7080,10 @@ static const struct file_operations fts_lockdown_info_ops = {
 static int fts_pm_suspend(struct device *dev)
 {
 	struct fts_ts_info *info = dev_get_drvdata(dev);
-
+	if (!info) {
+		logError(1, "%s fts_pm_suspend failed, return\n", tag);
+		return 0;
+	}
 #ifndef CONFIG_FTS_FOD_AREA_REPORT
 	if (device_may_wakeup(dev) && info->gesture_enabled) {
 		logError(1, "%s enable touch irq wake\n", tag);
@@ -6667,8 +7307,8 @@ static int fts_probe(struct spi_device *client)
 	int retval;
 	int skip_5_1 = 0;
 	u16 bus_type;
-	u8 *tp_maker;
-
+	int res = 0;
+	u8 gesture_cmd[6] = {0xA2, 0x03, 0x20, 0x00, 0x00, 0x01};
 	logError(1, "%s %s: driver ver: %s\n", tag, __func__,
 		 FTS_TS_DRV_VERSION);
 
@@ -6817,7 +7457,6 @@ static int fts_probe(struct spi_device *client)
 	info->input_dev->id.product = 0x0002;
 	info->input_dev->id.version = 0x0100;
 	info->input_dev->event = fts_input_event;
-	info->fod_status = 1;
 	input_set_drvdata(info->input_dev, info);
 
 	__set_bit(EV_SYN, info->input_dev->evbit);
@@ -6888,7 +7527,6 @@ static int fts_probe(struct spi_device *client)
 #endif
 #ifdef CONFIG_FTS_FOD_AREA_REPORT
 	input_set_capability(info->input_dev, EV_KEY, BTN_INFO);
-	input_set_capability(info->input_dev, EV_KEY, KEY_INFO);
 	input_set_capability(info->input_dev, EV_KEY, KEY_GOTO);
 #endif
 	mutex_init(&(info->input_report_mutex));
@@ -6939,7 +7577,6 @@ static int fts_probe(struct spi_device *client)
 		error = -ENODEV;
 		goto ProbeErrorExit_6;
 	}
-	/*update_hardware_info(TYPE_TOUCH, 4);*/
 
 #ifdef CONFIG_SECURE_TOUCH
 	logError(1, "%s %s create secure touch file...\n", tag, __func__);
@@ -6956,18 +7593,18 @@ static int fts_probe(struct spi_device *client)
 	/*dma buf init*/
 	info->dma_buf = (struct fts_dma_buf *)kzalloc(sizeof(*info->dma_buf), GFP_KERNEL);
 	if (!info->dma_buf) {
-		logError(1, "%s %s:ERROR alloc mem failed!", tag, __func__);
+		logError(1, "%s %s:Error alloc mem failed!", tag, __func__);
 		goto ProbeErrorExit_7;
 	}
 	mutex_init(&info->dma_buf->dmaBufLock);
 	info->dma_buf->rdBuf = kzalloc(PAGE_SIZE, GFP_KERNEL);
 	if (!info->dma_buf->rdBuf) {
-		logError(1, "%s %s:ERROR alloc mem failed!", tag, __func__);
+		logError(1, "%s %s:Error alloc mem failed!", tag, __func__);
 		goto ProbeErrorExit_7;
 	}
 	info->dma_buf->wrBuf = kzalloc(PAGE_SIZE, GFP_KERNEL);
 	if (!info->dma_buf->wrBuf) {
-		logError(1, "%s %s:ERROR alloc mem failed!", tag, __func__);
+		logError(1, "%s %s:Error alloc mem failed!", tag, __func__);
 		goto ProbeErrorExit_7;
 	}
 #endif
@@ -6984,9 +7621,7 @@ static int fts_probe(struct spi_device *client)
 			 info->lockdown_info[4], info->lockdown_info[5],
 			 info->lockdown_info[6], info->lockdown_info[7]);
 		info->lockdown_is_ok = true;
-		/*update_hardware_info(TYPE_TP_MAKER, info->lockdown_info[0] - 0x30); */
 	}
-
 #ifdef FW_UPDATE_ON_PROBE
 	logError(1, "%s FW Update and Sensing Initialization: \n", tag);
 	error = fts_fw_update(info, NULL, 0);
@@ -7025,20 +7660,13 @@ static int fts_probe(struct spi_device *client)
 		logError(1, "%s Error: can not create /proc file! \n", tag);
 	info->dbclick_count = 0;
 
-	tp_maker = kzalloc(20, GFP_KERNEL);
-	if (tp_maker == NULL)
-		logError(1, "%s fail to alloc vendor name memory\n", tag);
-	else {
-		kfree(tp_maker);
-		tp_maker = NULL;
-	}
 	device_init_wakeup(&client->dev, 1);
-
+	init_completion(&info->pm_resume_completion);
+/*
 	if (backlight_register_notifier(&info->bl_notifier) < 0) {
 		logError(1, "%s register bl_notifier failed!\n", tag);
 	}
-
-	init_completion(&info->pm_resume_completion);
+*/
 #ifdef CONFIG_TOUCHSCREEN_ST_DEBUG_FS
 	info->debugfs = debugfs_create_dir("tp_debug", NULL);
 	if (info->debugfs) {
@@ -7076,13 +7704,17 @@ static int fts_probe(struct spi_device *client)
 #endif
 #ifdef CONFIG_FTS_FOD_AREA_REPORT
 	mutex_init(&(info->fod_mutex));
-
-	error =
-	    sysfs_create_file(&info->fts_touch_dev->kobj,
-			      &dev_attr_fod_status.attr);
-	if (error) {
-		logError(1, "%s ERROR: Failed to create fod_status sysfs group!\n", tag);
-	}
+#ifdef CONFIG_FACTORY_BUILD
+	info->fod_status = 1;
+#else
+	info->fod_status = -1;
+#endif
+	res = fts_write(gesture_cmd, ARRAY_SIZE(gesture_cmd));
+	if (res < OK)
+		logError(1, "%s %s: enter gesture and longpress failed! ERROR %08X recovery in senseOff...\n",
+		tag, __func__, res);
+	else
+		logError(1, "%s %s send gesture and longpress cmd success\n", tag, __func__);
 	error =
 	    sysfs_create_file(&info->fts_touch_dev->kobj,
 			      &dev_attr_fod_test.attr);
@@ -7090,6 +7722,12 @@ static int fts_probe(struct spi_device *client)
 		logError(1, "%s ERROR: Failed to create fod_test sysfs group!\n", tag);
 	}
 #endif
+	error =
+	    sysfs_create_file(&info->fts_touch_dev->kobj,
+			      &dev_attr_ellipse_data.attr);
+	if (error) {
+		logError(1, "%s Error: Failed to create ellipse_data sysfs group!\n", tag);
+	}
 	info->tp_lockdown_info_proc =
 	    proc_create("tp_lockdown_info", 0444, NULL, &fts_lockdown_info_ops);
 	info->tp_selftest_proc =
@@ -7104,7 +7742,7 @@ static int fts_probe(struct spi_device *client)
 	    alloc_workqueue("fts-touch-feature",
 			    WQ_UNBOUND | WQ_HIGHPRI | WQ_CPU_INTENSIVE, 1);
 	if (!info->touch_feature_wq) {
-		logError(1, "%s ERROR: Cannot create touch feature work thread\n", tag);
+		logError(1, "%s Error: Cannot create touch feature work thread\n", tag);
 		goto ProbeErrorExit_8;
 	}
 	INIT_WORK(&info->cmd_update_work, fts_cmd_update_work);
@@ -7114,8 +7752,12 @@ static int fts_probe(struct spi_device *client)
 	xiaomi_touch_interfaces.setModeValue = fts_set_cur_value;
 	xiaomi_touch_interfaces.resetMode = fts_reset_mode;
 	xiaomi_touch_interfaces.getModeAll = fts_get_mode_all;
-	xiaomi_touch_interfaces.p_sensor_write = fts_palm_sensor_write;
+	xiaomi_touch_interfaces.p_sensor_write = fts_p_sensor_write;
 	xiaomi_touch_interfaces.palm_sensor_write = fts_palm_sensor_write;
+	xiaomi_touch_interfaces.panel_vendor_read = fts_panel_vendor_read;
+	xiaomi_touch_interfaces.panel_color_read = fts_panel_color_read;
+	xiaomi_touch_interfaces.panel_display_read = fts_panel_display_read;
+	xiaomi_touch_interfaces.touch_vendor_read = fts_touch_vendor_read;
 	xiaomitouch_register_modedata(&xiaomi_touch_interfaces);
 	fts_read_touchmode_data();
 	fts_init_touchmode_data();
@@ -7193,7 +7835,7 @@ static int fts_remove(struct spi_device *client)
 	sysfs_remove_group(&client->dev.kobj, &info->attrs);
 	/* remove interrupt and event handlers */
 	fts_interrupt_uninstall(info);
-	backlight_unregister_notifier(&info->bl_notifier);
+	/*backlight_unregister_notifier(&info->bl_notifier);*/
 #ifdef CONFIG_DRM
 	msm_drm_unregister_client(&info->notifier);
 #endif

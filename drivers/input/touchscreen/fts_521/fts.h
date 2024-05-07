@@ -4,6 +4,7 @@
  * FTS Capacitive touch screen controller (FingerTipS)
  *
  * Copyright (C) 2017, STMicroelectronics
+ * Copyright (C) 2019 XiaoMi, Inc.
  * Authors: AMG(Analog Mems Group)
  *
  * 		marco.cali@st.com
@@ -171,7 +172,7 @@ struct fts_config_info {
 	const char *fts_cfg_name;
 	const char *fts_limit_name;
 #ifdef CONFIG_FTS_TOUCH_COUNT_DUMP
-		const char *clicknum_file_name;
+	const char *clicknum_file_name;
 #endif
 };
 
@@ -196,6 +197,24 @@ struct fts_hw_platform_data {
 	bool dump_click_count;
 #endif
 	unsigned long keystates;
+#ifdef CONFIG_TOUCHSCREEN_XIAOMI_TOUCHFEATURE
+	u32 touch_up_threshold_min;
+	u32 touch_up_threshold_max;
+	u32 touch_up_threshold_def;
+	u32 touch_tolerance_min;
+	u32 touch_tolerance_max;
+	u32 touch_tolerance_def;
+	u32 edgefilter_leftright_def;
+	u32 edgefilter_topbottom_def;
+	u32 edgefilter_top_ingamemode;
+	u32 edgefilter_bottom_ingamemode;
+	u32 edgefilter_area_step1;
+	u32 edgefilter_area_step2;
+	u32 edgefilter_area_step3;
+	u32 touch_idletime_min;
+	u32 touch_idletime_max;
+	u32 touch_idletime_def;
+#endif
 };
 
 /*
@@ -293,7 +312,6 @@ struct fts_ts_info {
 	unsigned long touch_id;
 	unsigned long sleep_finger;
 	unsigned long touch_skip;
-	int coor[TOUCH_ID_MAX][2];
 #ifdef STYLUS_MODE
 	unsigned long stylus_id;
 #endif
@@ -350,8 +368,7 @@ struct fts_ts_info {
 	wait_queue_head_t 	wait_queue;
 	struct completion tp_reset_completion;
 	atomic_t system_is_resetting;
-	unsigned int fod_ok;
-	unsigned int fod_status;
+	int fod_status;
 	unsigned int fod_overlap;
 	unsigned long fod_id;
 	unsigned long fod_x;
@@ -359,14 +376,20 @@ struct fts_ts_info {
 	struct mutex fod_mutex;
 	struct mutex cmd_update_mutex;
 	bool fod_coordinate_update;
-	bool fod_status_set;
 	bool fod_pressed;
 	bool p_sensor_changed;
 	bool p_sensor_switch;
 	bool palm_sensor_changed;
 	bool palm_sensor_switch;
+	char *data_dump_buf;
+	int aod_status;
 	bool tp_pm_suspend;
 	struct completion pm_resume_completion;
+	bool gamemode_enable;
+#ifdef CONFIG_INPUT_PRESS_NDT
+	unsigned char forcekey_bit;
+	unsigned char last_forcekey_bit;
+#endif
 };
 
 struct fts_mode_switch {
@@ -385,9 +408,15 @@ extern int fts_proc_remove(void);
 #define CENTER_X 540
 #define CENTER_Y 2005
 #define CIRCLE_R 87
-#define FOD_LX 420
-#define FOD_LY 1885
-#define FOD_SIDE 242
+#ifndef CONFIG_FTS_U2
+#define FOD_LX 408
+#define FOD_LY 1873
+#define FOD_SIDE 266
+#else
+#define FOD_LX 1220
+#define FOD_LY 1939
+#define FOD_SIDE 220
+#endif
 bool fts_is_infod(void);
 void fts_get_pointer(int *touch_flag, int *x, int *y);
 #endif

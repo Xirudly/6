@@ -410,7 +410,7 @@ int writeSysCmd(u8 sys_cmd, u8 *sett, int size)
 
 	cmd = (u8 *)kzalloc(sizeof(u8) * size + 2, GFP_KERNEL);
 	if (!cmd) {
-		ret = ERROR_ALLOC;
+		ret = -ENOMEM;
 		goto end;
 	}
 
@@ -432,8 +432,9 @@ int writeSysCmd(u8 sys_cmd, u8 *sett, int size)
 		} else {
 			logError(1, "%s %s: No setting argument! ERROR %08X\n",
 				 tag, __func__, ERROR_OP_NOT_ALLOW);
-			ret = ERROR_OP_NOT_ALLOW;
-			goto end;
+			if (cmd)
+				kfree(cmd);
+			return ERROR_OP_NOT_ALLOW;
 		}
 	}
 	if (ret < OK) {

@@ -59,10 +59,77 @@ int initTestToDo(void)
 	limit_file.size = 0;
 	limit_file.data = NULL;
 	strlcpy(limit_file.name, " ", MAX_LIMIT_FILE_NAME);
-	tests.SelfHoverForceRaw=1;		/* /< SS Hover Force Raw min/Max test */
-	tests.SelfHoverSenceRaw=1;		/* /< SS Hover Sence Raw min/Max test */
-	tests.SelfHoverForceIxTotal=1;	/* /< SS Hover Total Force Ix min/Max (for each node)* test */
-	tests.SelfHoverSenceIxTotal=1;
+#ifdef CONFIG_FTS_U2
+	tests.SelfHoverForceRaw = 0;		/* /< SS Hover Force Raw min/Max test */
+	tests.SelfHoverSenceRaw = 0;		/* /< SS Hover Sence Raw min/Max test */
+	tests.SelfHoverForceIxTotal = 0;	/* /< SS Hover Total Force Ix min/Max (for each node)* test */
+	tests.SelfHoverSenceIxTotal = 0;
+	tests.MutualRawAdjITO = 1;
+	tests.MutualRaw = 1;
+	tests.MutualRawEachNode = 1;
+	tests.MutualRawGap = 0;
+	tests.MutualRawAdj = 0;
+	tests.MutualRawLP = 0;
+	tests.MutualRawGapLP = 0;
+	tests.MutualRawAdjLP = 0;
+	tests.MutualCx1 = 0;
+	tests.MutualCx2 = 0;
+	tests.MutualCx2Adj = 0;
+	tests.MutualCxTotal = 0;
+	tests.MutualCxTotalAdj = 0;
+
+	tests.MutualCx1LP = 0;
+	tests.MutualCx2LP = 1;
+	tests.MutualCx2AdjLP = 1;
+	tests.MutualCxTotalLP = 0;
+	tests.MutualCxTotalAdjLP = 0;
+#ifdef PHONE_KEY
+	tests.MutualKeyRaw = 0;
+#else
+	tests.MutualKeyRaw = 0;
+#endif
+	tests.MutualKeyCx1 = 0;
+	tests.MutualKeyCx2 = 0;
+#ifdef PHONE_KEY
+	tests.MutualKeyCxTotal = 0;
+#else
+	tests.MutualKeyCxTotal = 0;
+#endif
+	tests.SelfForceRaw = 1;
+	tests.SelfForceRawMap = 1;
+	tests.SelfForceRawGap = 0;
+	tests.SelfForceRawLP = 0;
+	tests.SelfForceRawGapLP = 0;
+	tests.SelfForceIx1 = 0;
+	tests.SelfForceIx2 = 0;
+	tests.SelfForceIx2Adj = 0;
+	tests.SelfForceIxTotal = 1;
+	tests.SelfForceIxTotalAdj = 0;
+	tests.SelfForceCx1 = 0;
+	tests.SelfForceCx2 = 0;
+	tests.SelfForceCx2Adj = 0;
+	tests.SelfForceCxTotal = 0;
+	tests.SelfForceCxTotalAdj = 0;
+	tests.SelfSenseRaw = 1;
+	tests.SelfSenseRawMap = 1;
+	tests.SelfSenseRawGap = 0;
+	tests.SelfSenseRawLP = 0;
+	tests.SelfSenseRawGapLP = 0;
+	tests.SelfSenseIx1 = 0;
+	tests.SelfSenseIx2 = 0;
+	tests.SelfSenseIx2Adj = 0;
+	tests.SelfSenseIxTotal = 1;
+	tests.SelfSenseIxTotalAdj = 0;
+	tests.SelfSenseCx1 = 0;
+	tests.SelfSenseCx2 = 0;
+	tests.SelfSenseCx2Adj = 0;
+	tests.SelfSenseCxTotal = 0;
+	tests.SelfSenseCxTotalAdj = 0;
+#else
+	tests.SelfHoverForceRaw = 0;		/* /< SS Hover Force Raw min/Max test */
+	tests.SelfHoverSenceRaw = 0;		/* /< SS Hover Sence Raw min/Max test */
+	tests.SelfHoverForceIxTotal = 0;	/* /< SS Hover Total Force Ix min/Max (for each node)* test */
+	tests.SelfHoverSenceIxTotal = 0;
 	tests.MutualRawAdjITO = 0;
 	tests.MutualRaw = 0;
 	tests.MutualRawEachNode = 1;
@@ -122,6 +189,7 @@ int initTestToDo(void)
 	tests.SelfSenseCx2Adj = 0;
 	tests.SelfSenseCxTotal = 0;
 	tests.SelfSenseCxTotalAdj = 0;
+#endif
 	return OK;
 }
 
@@ -767,7 +835,7 @@ int production_test_ito(char *path_limits, TestToDo *todo)
 	}
 
 	sett[0] = 0xFF;
-	sett[1] = 0xFF;
+	sett[1] = 0x01;
 	logError(0, "%s ITO Check command sent... \n", tag);
 	res = writeSysCmd(SYS_CMD_ITO, sett, 2);
 
@@ -3284,7 +3352,7 @@ int production_test_ss_hover_raw(char *path_limits, int stop_on_fail,
 	ret = fts_write_dma_safe(hover_cnt, sizeof(hover_cnt));
 	if (ret != OK) {
 		logError(1,
-			 "%s hover clear count ERROR = %d\n", tag, ret);
+			 "%s hover clear count ERROR = %d\n",tag, ret);
 		goto ERROR_LIMITS;
 	}
 
@@ -3314,7 +3382,7 @@ int production_test_ss_hover_raw(char *path_limits, int stop_on_fail,
 			goto ERROR_LIMITS;
 		}
 
-		ret = checkLimitsMinMax(ssHoverRawFrame.force_data, rows,columns, thresholds[0], thresholds[1]);
+		ret = checkLimitsMinMax(ssHoverRawFrame.force_data, rows,columns, thresholds[0],thresholds[1]);
 		if (ret != OK) {
 			logError(1,
 				 "%s production_test_data: checkLimitsMinMax SS HOVER RAW FORCE failed... ERROR COUNT = %d\n",tag, ret);
@@ -3365,7 +3433,7 @@ int production_test_ss_hover_raw(char *path_limits, int stop_on_fail,
 			goto ERROR_LIMITS;
 		}
 
-		ret = checkLimitsMinMax(ssHoverRawFrame.sense_data, rows, columns, thresholds[0], thresholds[1]);
+		ret = checkLimitsMinMax(ssHoverRawFrame.sense_data, rows,columns, thresholds[0],thresholds[1]);
 		if (ret != OK) {
 			logError(1,
 				 "%s production_test_data: checkLimitsMinMax SS Hover RAW SENSE failed... ERROR COUNT = %d\n",
@@ -3419,6 +3487,8 @@ int production_test_ss_raw(char *path_limits, int stop_on_fail, TestToDo *todo)
 	int rows, columns;
 	SelfSenseFrame ssRawFrame;
 	int *thresholds = NULL;
+	int *thresholds_min = NULL;
+	int *thresholds_max = NULL;
 	int trows, tcolumns;
 	logError(0, "%s \n", tag);
 	/******************************* Self Sense Test *******************************/
@@ -3437,7 +3507,7 @@ int production_test_ss_raw(char *path_limits, int stop_on_fail, TestToDo *todo)
 	}
 
 
-	if (todo->SelfForceRaw == 1 || todo->SelfForceRawGap == 1) {
+	if (todo->SelfForceRaw == 1 || todo->SelfForceRawGap == 1 || todo->SelfForceRawMap == 1) {
 		columns = 1;
 		rows = ssRawFrame.header.force_node;
 		logError(0, "%s SS RAW FORCE MIN MAX TEST:  \n", tag);
@@ -3495,7 +3565,71 @@ int production_test_ss_raw(char *path_limits, int stop_on_fail, TestToDo *todo)
 				 "%s SS RAW (PROXIMITY) FORCE MIN MAX TEST:.................SKIPPED \n\n",
 				 tag);
 
-		logError(0, "%s \n", tag);
+		logError(1, "%s SS RAW FORCE MAP MIN MAX TEST:\n", tag);
+		if (todo->SelfForceRawMap == 1) {
+			ret = parseProductionTestLimits(path_limits,
+				&limit_file, SS_RAW_FORCE_EACH_NODE_MIN,
+				&thresholds_min, &trows, &tcolumns);
+			if (ret < OK || (trows != rows ||
+					 tcolumns != columns)) {
+				logError(1,
+					 "%s production_test_data: parseProductionTestLimits SS_RAW_FORCE_EACH_NODE_MIN failed... ERROR %08X\n",
+					 tag, ERROR_PROD_TEST_DATA);
+				ret |= ERROR_PROD_TEST_DATA;
+				goto ERROR_LIMITS;
+			}
+			ret = parseProductionTestLimits(path_limits,
+				&limit_file, SS_RAW_FORCE_EACH_NODE_MAX,
+				&thresholds_max, &trows, &tcolumns);
+			if (ret < OK || (trows != rows ||
+					 tcolumns != columns)) {
+				logError(1,
+					 "%s production_test_data: parseProductionTestLimits SS_RAW_FORCE_EACH_NODE_MAX failed... ERROR %08X\n",
+					 tag, ERROR_PROD_TEST_DATA);
+				ret |= ERROR_PROD_TEST_DATA;
+				goto ERROR_LIMITS;
+			}
+
+			ret = checkLimitsMapTotal(ssRawFrame.force_data, rows,
+						columns, thresholds_min,
+						thresholds_max);
+			if (ret != OK) {
+				logError(1,
+					 "%s production_test_data: checkLimitsMinMax SS RAW FORCE MAP failed... ERROR COUNT = %d\n",
+					 tag, ret);
+				logError(0,
+					 "%s SS RAW FORCE MAP MIN MAX TEST:.................FAIL\n\n",
+					 tag);
+				count_fail += 1;
+				print_frame_short("SS Raw force frame =",
+						  array1dTo2d_short(
+							  ssRawFrame.force_data,
+							  rows *
+							  columns,
+							  columns), rows,
+						  columns);
+				if (stop_on_fail) {
+					ret = ERROR_PROD_TEST_DATA |
+					      ERROR_TEST_CHECK_FAIL;
+					goto ERROR_LIMITS;
+				}
+			} else
+				logError(0,
+					 "%s SS RAW FORCE MAP MIN MAX TEST:.................OK\n\n",
+					 tag);
+
+			if (thresholds_min != NULL) {
+				kfree(thresholds_min);
+				thresholds_min = NULL;
+			}
+			if (thresholds_max != NULL) {
+				kfree(thresholds_max);
+				thresholds_max = NULL;
+			}
+		} else
+			logError(0,
+				 "%s SS RAW FORCE MAP MIN MAX TEST:.................SKIPPED\n\n",
+				 tag);
 
 		if (todo->SelfForceRawGap == 1) {
 			logError(1, "%s SS RAW FORCE GAP TEST:  \n", tag);
@@ -3558,7 +3692,7 @@ int production_test_ss_raw(char *path_limits, int stop_on_fail, TestToDo *todo)
 
 	logError(0, "%s \n", tag);
 
-	if (todo->SelfSenseRaw == 1 || todo->SelfSenseRawGap == 1) {
+	if (todo->SelfSenseRaw == 1 || todo->SelfSenseRawGap == 1 || todo->SelfSenseRawMap == 1) {
 		columns = ssRawFrame.header.sense_node;
 		rows = 1;
 
@@ -3613,6 +3747,71 @@ int production_test_ss_raw(char *path_limits, int stop_on_fail, TestToDo *todo)
 		} else
 			logError(0,
 				 "%s SS RAW (PROXIMITY) SENSE MIN MAX TEST:.................SKIPPED \n",
+				 tag);
+		logError(1, "%s SS RAW SENSE MAP MIN MAX TEST:\n", tag);
+		if (todo->SelfSenseRawMap == 1) {
+			ret = parseProductionTestLimits(path_limits,
+				&limit_file, SS_RAW_SENSE_EACH_NODE_MIN,
+				&thresholds_min, &trows, &tcolumns);
+			if (ret < OK || (trows != rows ||
+					 tcolumns != columns)) {
+				logError(1,
+					 "%s production_test_data: parseProductionTestLimits SS_RAW_SENSE_EACH_NODE_MIN failed... ERROR %08X\n",
+					 tag, ERROR_PROD_TEST_DATA);
+				ret |= ERROR_PROD_TEST_DATA;
+				goto ERROR_LIMITS;
+			}
+			ret = parseProductionTestLimits(path_limits,
+				&limit_file, SS_RAW_SENSE_EACH_NODE_MAX,
+				&thresholds_max, &trows, &tcolumns);
+			if (ret < OK || (trows != rows ||
+					 tcolumns != columns)) {
+				logError(1,
+					 "%s production_test_data: parseProductionTestLimits SS_RAW_SENSE_EACH_NODE_MAX failed... ERROR %08X\n",
+					 tag, ERROR_PROD_TEST_DATA);
+				ret |= ERROR_PROD_TEST_DATA;
+				goto ERROR_LIMITS;
+			}
+
+			ret = checkLimitsMapTotal(ssRawFrame.sense_data, rows,
+						columns, thresholds_min,
+						thresholds_max);
+			if (ret != OK) {
+				logError(1,
+					 "%s production_test_data: checkLimitsMinMax SS RAW SENSE MAP failed... ERROR COUNT = %d\n",
+					 tag, ret);
+				logError(0,
+					 "%s SS RAW SENSE MAP MIN MAX TEST:.................FAIL\n\n",
+					 tag);
+				count_fail += 1;
+				print_frame_short("SS Raw sense frame =",
+						  array1dTo2d_short(
+							  ssRawFrame.sense_data,
+							  rows *
+							  columns,
+							  columns), rows,
+						  columns);
+				if (stop_on_fail) {
+					ret = ERROR_PROD_TEST_DATA |
+					      ERROR_TEST_CHECK_FAIL;
+					goto ERROR_LIMITS;
+				}
+			} else
+				logError(0,
+					 "%s SS RAW SENSE MAP MIN MAX TEST:.................OK\n\n",
+					 tag);
+
+			if (thresholds_min != NULL) {
+				kfree(thresholds_min);
+				thresholds_min = NULL;
+			}
+			if (thresholds_max != NULL) {
+				kfree(thresholds_max);
+				thresholds_max = NULL;
+			}
+		} else
+			logError(0,
+				 "%s SS RAW SENSE MAP MIN MAX TEST:.................SKIPPED\n\n",
 				 tag);
 
 		logError(0, "%s \n", tag);
@@ -4014,7 +4213,7 @@ ERROR_LIMITS:
 	return ret;
 }
 
-int production_test_ss_hover_ix(char *path_limits, int stop_on_fail, TestToDo *todo){
+int production_test_ss_hover_ix(char *path_limits, int stop_on_fail,TestToDo *todo){
 	TotSelfSenseData ssHoverCompData;
 	int ret;
 	int trows, tcolumns;
@@ -4034,9 +4233,9 @@ int production_test_ss_hover_ix(char *path_limits, int stop_on_fail, TestToDo *t
 	logError(0, "%s SS Hover TOTAL IX FORCE TEST:\n", tag);
 	logError(0, "%s SS Hover TOTAL IX FORCE MIN MAX TEST:\n", tag);
 	if (todo->SelfHoverForceIxTotal == 1) {
-		ret = parseProductionTestLimits(path_limits, &limit_file, SS_HOVER_TOTAL_IX_FORCE_MAP_MIN, &thresholds_min, &trows, &tcolumns);
+		ret = parseProductionTestLimits(path_limits,&limit_file,SS_HOVER_TOTAL_IX_FORCE_MAP_MIN,&thresholds_min,&trows, &tcolumns);
 					/* load the min thresholds */
-		if (ret < 0 || (trows != ssHoverCompData.header.force_node || tcolumns != 1)) {
+		if (ret < 0 || (trows != ssHoverCompData.header.force_node ||tcolumns != 1)) {
 			logError(1,
 				 "%s production_test_data: parseProductionTestLimits SS_TOTAL_IX_FORCE_MAP_MIN failed... ERROR %08X\n",
 				 tag, ERROR_PROD_TEST_DATA);
@@ -4044,7 +4243,7 @@ int production_test_ss_hover_ix(char *path_limits, int stop_on_fail, TestToDo *t
 			goto ERROR_LIMITS;
 		}
 
-		ret = parseProductionTestLimits(path_limits, &limit_file,SS_TOTAL_IX_FORCE_MAP_MAX, &thresholds_max, &trows, &tcolumns);
+		ret = parseProductionTestLimits(path_limits,&limit_file,SS_TOTAL_IX_FORCE_MAP_MAX,&thresholds_max,&trows, &tcolumns);
 					/* load the max thresholds */
 		if (ret < 0 || (trows !=
 				ssHoverCompData.header.force_node ||

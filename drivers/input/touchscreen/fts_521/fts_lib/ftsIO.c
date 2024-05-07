@@ -326,9 +326,9 @@ int fts_read_dma_safe(u8 *outBuf, int byteToRead)
 		if (unlikely(byteToRead > PAGE_SIZE)) {
 			tmpBuf = kzalloc(byteToRead, GFP_KERNEL);
 			if (!tmpBuf) {
-				logError(1, "%s %s:ERROR alloc mem failed!", tag, __func__);
+				logError(1, "%s %s:Error alloc mem failed!", tag, __func__);
 				mutex_unlock(&dma->dmaBufLock);
-				return ERROR_ALLOC;
+				return -ENOMEM;
 			}
 			finalBuf = tmpBuf;
 		} else {
@@ -363,9 +363,9 @@ int fts_writeRead_dma_safe(u8 *cmd, int cmdLength, u8 *outBuf, int byteToRead)
 		if (unlikely(cmdLength > PAGE_SIZE)) {
 			tmpWrBuf = kzalloc(cmdLength, GFP_KERNEL);
 			if (!tmpWrBuf) {
-				logError(1, "%s %s:ERROR alloc mem failed!", tag, __func__);
+				logError(1, "%s %s:Error alloc mem failed!", tag, __func__);
 				mutex_unlock(&dma->dmaBufLock);
-				return ERROR_ALLOC;
+				return -ENOMEM;
 			}
 			wrBuf = tmpWrBuf;
 		} else {
@@ -380,11 +380,11 @@ int fts_writeRead_dma_safe(u8 *cmd, int cmdLength, u8 *outBuf, int byteToRead)
 		if (unlikely(byteToRead > PAGE_SIZE)) {
 			tmpRdBuf = kzalloc(byteToRead, GFP_KERNEL);
 			if (!tmpRdBuf) {
-				logError(1, "%s %s:ERROR alloc mem failed!", tag, __func__);
+				logError(1, "%s %s:Error alloc mem failed!", tag, __func__);
 				if (tmpWrBuf)
 					kfree(tmpWrBuf);
 				mutex_unlock(&dma->dmaBufLock);
-				return ERROR_ALLOC;
+				return -ENOMEM;
 			}
 			rdBuf = tmpRdBuf;
 		} else {
@@ -422,9 +422,9 @@ int fts_write_dma_safe(u8 *cmd, int cmdLength)
 		if (unlikely(cmdLength > PAGE_SIZE)) {
 			tmpBuf = kzalloc(cmdLength, GFP_KERNEL);
 			if (!tmpBuf) {
-				logError(1, "%s %s:ERROR alloc mem failed!", tag, __func__);
+				logError(1, "%s %s:Error alloc mem failed!", tag, __func__);
 				mutex_unlock(&dma->dmaBufLock);
-				return ERROR_ALLOC;
+				return -ENOMEM;
 			}
 			finalBuf = tmpBuf;
 		} else {
@@ -749,7 +749,7 @@ int fts_writeU8UXthenWriteU8UX(u8 cmd1, AddrSize addrSize1, u8 cmd2,
 	mutex_lock(&rw_lock);
 	finalCmd1 = (u8 *)kzalloc(sizeof(u8) * 10, GFP_KERNEL);
 	if (!finalCmd1) {
-		ret =  ERROR_ALLOC;
+		ret = -ENOMEM;
 		goto end;
 	}
 
@@ -783,16 +783,20 @@ int fts_writeU8UXthenWriteU8UX(u8 cmd1, AddrSize addrSize1, u8 cmd2,
 		if (fts_write(finalCmd1, 1 + addrSize1) < OK) {
 			logError(1, "%s %s: first write error... ERROR %08X \n",
 				 tag, __func__, ERROR_BUS_W);
-			ret = ERROR_BUS_W;
-			goto end;
+			if (finalCmd1)
+				kfree(finalCmd1);
+			mutex_unlock(&rw_lock);
+			return ERROR_BUS_W;
 		}
 
 		if (fts_write(finalCmd2, 1 + addrSize2 + toWrite) < OK) {
 			logError(1,
 				 "%s %s: second write error... ERROR %08X \n",
 				 tag, __func__, ERROR_BUS_W);
-			ret = ERROR_BUS_W;
-			goto end;
+			if (finalCmd1)
+				kfree(finalCmd1);
+			mutex_unlock(&rw_lock);
+			return ERROR_BUS_W;
 		}
 
 		address += toWrite;
@@ -833,12 +837,12 @@ int fts_writeU8UXthenWriteReadU8UX(u8 cmd1, AddrSize addrSize1, u8 cmd2,
 	mutex_lock(&rw_lock);
 	finalCmd1 = (u8 *)kzalloc(sizeof(u8) * 10, GFP_KERNEL);
 	if (!finalCmd1) {
-		ret =  ERROR_ALLOC;
+		ret = -ENOMEM;
 		goto end;
 	}
 	finalCmd2 = (u8 *)kzalloc(sizeof(u8) * 10, GFP_KERNEL);
 	if (!finalCmd2) {
-		ret =  ERROR_ALLOC;
+		ret = -ENOMEM;
 		goto end;
 	}
 
