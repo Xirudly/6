@@ -6230,7 +6230,7 @@ static void soc_work_fn(struct work_struct *work)
 		pr_err("Error in getting batt_temp, rc=%d\n", rc);
 
 
-	if (temp < 480 && fg->last_batt_temp >= 480) {
+	if (temp < 450 && fg->last_batt_temp >= 450) {
 		/* follow the way that fg_notifier_cb use wake lock */
 		pm_stay_awake(fg->dev);
 		schedule_work(&fg->status_change_work);

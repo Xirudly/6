@@ -25,7 +25,6 @@
 #include <linux/of_batterydata.h>
 #include <linux/ktime.h>
 #include <linux/gpio.h>
-#include <linux/module.h>
 #include "smb5-lib.h"
 #include "smb5-reg.h"
 #include "schgm-flash.h"
@@ -51,9 +50,6 @@
 	((typec_mode == POWER_SUPPLY_TYPEC_SOURCE_MEDIUM	\
 	|| typec_mode == POWER_SUPPLY_TYPEC_SOURCE_HIGH)	\
 	&& (!chg->typec_legacy || chg->typec_legacy_use_rp_icl))
-
-bool skip_thermal = true;
-module_param(skip_thermal, bool, 0644);
 
 static bool off_charge_flag;
 static bool first_boot_flag;
@@ -3138,16 +3134,10 @@ static int smblib_therm_charging(struct smb_charger *chg)
 {
 	int thermal_icl_ua = 0;
 	int thermal_fcc_ua = 0;
-	int temp_level;
 	int rc;
 
 	if (chg->system_temp_level >= MAX_TEMP_LEVEL)
 		return 0;
-
-	if (skip_thermal) {
-		temp_level = chg->system_temp_level;
-		chg->system_temp_level = 0;
-	}
 
 	switch (chg->real_charger_type) {
 	case POWER_SUPPLY_TYPE_USB_HVDCP:
@@ -3260,10 +3250,6 @@ static int smblib_therm_charging(struct smb_charger *chg)
 				pr_err("Couldn't enable USB thermal ICL vote rc=%d\n",
 						rc);
 		}
-	}
-
-	if (skip_thermal) {
-		chg->system_temp_level = temp_level;
 	}
 
 	return rc;
