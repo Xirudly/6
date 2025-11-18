@@ -8202,6 +8202,57 @@ ssize_t dsi_display_mipi_reg_read(struct drm_connector *connector,
 	return dsi_panel_mipi_reg_read(display->panel, buf);
 }
 
+#ifdef CONFIG_PANEL_DC_DIMMING
+int dsi_panel_set_dc_dimming(struct dsi_panel *panel, int dc_dimming);
+int dsi_display_set_dc_dimming(struct drm_connector *connector,
+			int dc_dimming)
+{
+	struct dsi_panel *panel = NULL;
+	struct dsi_display *display = NULL;
+	struct dsi_bridge *c_bridge = NULL;
+
+	if (!connector || !connector->encoder || !connector->encoder->bridge) {
+		pr_err("Invalid connector/encoder/bridge ptr\n");
+		return -EINVAL;
+	}
+
+	c_bridge =  to_dsi_bridge(connector->encoder->bridge);
+	display = c_bridge->display;
+	if (!display || !display->panel) {
+		pr_err("Invalid display/panel ptr\n");
+		return -EINVAL;
+	}
+
+	panel = display->panel;
+	return dsi_panel_set_dc_dimming(panel, dc_dimming);
+}
+
+ssize_t dsi_display_get_dc_dimming(struct drm_connector *connector, char *buf)
+{
+	struct dsi_panel *panel = NULL;
+	struct dsi_display *display = NULL;
+	struct dsi_bridge *c_bridge = NULL;
+	bool status;
+
+	if (!connector || !connector->encoder || !connector->encoder->bridge) {
+		pr_err("Invalid connector/encoder/bridge ptr\n");
+		return -EINVAL;
+	}
+
+	c_bridge = to_dsi_bridge(connector->encoder->bridge);
+	display = c_bridge->display;
+	if (!display || !display->panel) {
+		pr_err("Invalid display/panel ptr\n");
+		return -EINVAL;
+	}
+
+	panel = display->panel;
+	status = panel->dc_dimming_enabled;
+
+	return snprintf(buf, PAGE_SIZE, "%d\n", status);
+}
+#endif
+
 module_param_string(dsi_display0, dsi_display_primary, MAX_CMDLINE_PARAM_LEN,
 								0600);
 MODULE_PARM_DESC(dsi_display0,

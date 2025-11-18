@@ -133,6 +133,15 @@ static char dsi_dsc_rc_range_max_qp_1_1_scr1[][15] = {
 static char dsi_dsc_rc_range_bpg_offset[] = {2, 0, 0, -2, -4, -6, -8, -8,
 		-8, -10, -10, -12, -12, -12, -12};
 
+#ifdef CONFIG_PANEL_DC_DIMMING
+int dsi_panel_set_dc_dimming(struct dsi_panel *panel, int dc_dimming)
+{
+	panel_disp_param_send_lock(panel, dc_dimming ?
+		DISPPARAM_DC_LAYER_ON : DISPPARAM_DC_LAYER_OFF);
+	return 0;
+}
+#endif
+
 int dsi_dsc_create_pps_buf_cmd(struct msm_display_dsc_info *dsc, char *buf,
 				int pps_id)
 {
@@ -876,6 +885,10 @@ int dsi_panel_set_backlight(struct dsi_panel *panel, u32 bl_lvl)
 	case DSI_BACKLIGHT_DCS:
 		if (panel->fod_backlight_flag) {
 			pr_info("fod_backlight_flag set\n");
+#ifdef CONFIG_PANEL_DC_DIMMING
+		} else if (bl_lvl && bl_lvl < panel->dc_threshold && panel->dc_dimming_enabled) {
+			rc = dsi_panel_update_backlight(panel, panel->dc_threshold);
+#endif
 		} else {
 			rc = dsi_panel_update_backlight(panel, bl_temp);
 		}
@@ -5125,6 +5138,20 @@ static int panel_disp_param_send_lock(struct dsi_panel *panel, int param)
 		pr_info("ceoff\n");
 		rc = dsi_panel_tx_cmd_set(panel, DSI_CMD_SET_DISP_CEOFF);
 		break;
+#ifdef CONFIG_PANEL_DC_DIMMING
+	case DISPPARAM_DC_LAYER_ON:
+		pr_info("panel dc layer on\n");
+		panel->dc_dimming_enabled = true;
+		if (panel->last_bl_lvl < panel->dc_threshold)
+			rc = dsi_panel_update_backlight(panel, panel->dc_threshold);
+		break;
+	case DISPPARAM_DC_LAYER_OFF:
+		pr_info("panel dc layer off\n");
+		panel->dc_dimming_enabled = false;
+		if (panel->last_bl_lvl < panel->dc_threshold)
+			rc = dsi_panel_update_backlight(panel, panel->last_bl_lvl);
+		break;
+#endif
 	default:
 		break;
 	}

@@ -348,6 +348,9 @@ enum mi_dimlayer_type {
 
 struct mi_dimlayer_state{
 	enum mi_dimlayer_type mi_dimlayer_type;
+#ifdef CONFIG_PANEL_DC_DIMMING
+	uint32_t current_backlight;
+#endif
 };
 
 /**
@@ -929,5 +932,10 @@ void sde_connector_mi_update_dimlayer_state(struct drm_connector *connector,
 int sde_connector_update_hbm(struct sde_connector *c_conn);
 
 void sde_connector_fod_notify(struct drm_connector *connector);
+
+#ifdef CONFIG_PANEL_DC_DIMMING
+void sde_connector_dc_get_current_backlight(struct drm_connector *connector, uint32_t *brightness);
+void sde_connector_dc_get_current_alpha(struct drm_connector *connector, uint32_t brightness, uint32_t *alpha);
+#endif
 
 #endif /* _SDE_CONNECTOR_H_ */

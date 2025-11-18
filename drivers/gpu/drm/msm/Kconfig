@@ -215,3 +215,7 @@ config FENCE_DEBUG
 	bool "Print fence name to userspace"
 	depends on DRM_MSM
 	default n
+
+config PANEL_DC_DIMMING
+	bool "Support for sde-crtc dc_dimming layer"
+	depends on DRM_MSM
