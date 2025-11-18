@@ -27,6 +27,9 @@
 #include "sde_rm.h"
 #include "sde_trace.h"
 #include <linux/msm_drm_notify.h>
+#ifdef CONFIG_PANEL_DC_DIMMING
+#include "mi_sm8150/dc_panel_alpha.h"
+#endif
 
 #define BL_NODE_NAME_SIZE 32
 
@@ -45,6 +48,17 @@ enum bkl_dimming_state {
 
 #define SDE_ERROR_CONN(c, fmt, ...) SDE_ERROR("conn%d " fmt,\
 		(c) ? (c)->base.base.id : -1, ##__VA_ARGS__)
+
+#ifdef CONFIG_PANEL_DC_DIMMING
+#define to_dsi_bridge(x) container_of((x), struct dsi_bridge, base)
+static uint32_t interpolate(uint32_t x, uint32_t xa, uint32_t xb, uint32_t ya, uint32_t yb)
+{
+	uint32_t bf;
+
+	bf = ya - (ya - yb) * (x - xa) / (xb - xa);
+	return bf;
+}
+#endif
 
 static const struct drm_prop_enum_list e_topology_name[] = {
 	{SDE_RM_TOPOLOGY_NONE,	"sde_none"},
@@ -125,6 +139,9 @@ static int sde_backlight_device_update_status(struct backlight_device *bd)
 		rc = c_conn->ops.set_backlight(&c_conn->base,
 				c_conn->display, bl_lvl);
 		c_conn->unset_bl_level = 0;
+#ifdef CONFIG_PANEL_DC_DIMMING
+		c_conn->mi_dimlayer_state.current_backlight = bl_lvl;
+#endif
 	}
 
 	return rc;
@@ -2815,3 +2832,76 @@ void sde_connector_mi_update_dimlayer_state(struct drm_connector *connector,
 	struct sde_connector *c_conn = to_sde_connector(connector);
 	c_conn->mi_dimlayer_state.mi_dimlayer_type = mi_dimlayer_type;
 }
+
+#ifdef CONFIG_PANEL_DC_DIMMING
+static uint32_t brightness_to_dc_alpha(uint32_t brightness)
+{
+	int i, level = ARRAY_SIZE(brightness_dc_alpha_lut);
+
+	if (brightness == 0)
+		return brightness_dc_alpha_lut[0].alpha;
+
+	for (i = 0; i < level; i++)
+		if (brightness_dc_alpha_lut[i].brightness >= brightness)
+			break;
+
+	if (i == level)
+		return brightness_dc_alpha_lut[i - 1].alpha;
+
+	return interpolate(brightness,
+		brightness_dc_alpha_lut[i-1].brightness, brightness_dc_alpha_lut[i].brightness,
+		brightness_dc_alpha_lut[i-1].alpha, brightness_dc_alpha_lut[i].alpha);
+}
+
+void sde_connector_dc_get_current_alpha(struct drm_connector *connector,
+			uint32_t brightness, uint32_t *alpha)
+{
+	struct dsi_display *display = NULL;
+	struct dsi_bridge *c_bridge = NULL;
+
+	if (!connector || !connector->encoder || !connector->encoder->bridge) {
+		SDE_ERROR("Invalid connector/encoder/bridge ptr\n");
+		return;
+	}
+
+	c_bridge = to_dsi_bridge(connector->encoder->bridge);
+	display = c_bridge->display;
+
+	if (!display || !display->panel) {
+		SDE_ERROR("invalid display/panel ptr\n");
+		return;
+	}
+
+	*alpha = brightness_to_dc_alpha(brightness);
+	return;
+}
+
+void sde_connector_dc_get_current_backlight(struct drm_connector *connector, uint32_t *brightness)
+{
+	struct sde_connector *c_conn = to_sde_connector(connector);
+	struct dsi_panel *panel = NULL;
+	struct dsi_display *display = NULL;
+	struct dsi_bridge *c_bridge = NULL;
+
+	if (!connector || !connector->encoder || !connector->encoder->bridge) {
+		SDE_ERROR("Invalid connector/encoder/bridge ptr\n");
+		return;
+	}
+
+	c_bridge = to_dsi_bridge(connector->encoder->bridge);
+	display = c_bridge->display;
+
+	if (!display || !display->panel) {
+		SDE_ERROR("invalid display/panel ptr\n");
+		return;
+	}
+
+	panel = display->panel;
+	if (panel->in_aod || !panel->dc_dimming_enabled) {
+		*brightness = panel->dc_threshold;
+		return;
+	}
+
+	*brightness = c_conn->mi_dimlayer_state.current_backlight;
+}
+#endif

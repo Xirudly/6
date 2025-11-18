@@ -425,6 +425,31 @@ static ssize_t mipi_reg_store(struct device *device,
 	return dsi_display_mipi_reg_write(connector, (char *)buf, count);;
 }
 
+#ifdef CONFIG_PANEL_DC_DIMMING
+ssize_t dsi_display_get_dc_dimming(struct drm_connector *connector, char *buf);
+static ssize_t dc_dimming_show(struct device *dev,
+		struct device_attribute *attr, char *buf)
+{
+	struct drm_connector *connector = to_drm_connector(dev);
+
+	return dsi_display_get_dc_dimming(connector, buf);
+}
+
+int dsi_display_set_dc_dimming(struct drm_connector *connector, int dc_dimming);
+static ssize_t dc_dimming_store(struct device *device,
+		struct device_attribute *attr, const char *buf, size_t count)
+{
+	struct drm_connector *connector = to_drm_connector(device);
+	int ret, dc_dimming;
+
+	ret = kstrtoint(buf, 0, &dc_dimming);
+	if (ret)
+		return ret;
+
+	ret = dsi_display_set_dc_dimming(connector, dc_dimming);
+	return ret ? ret : count;
+}
+#endif
 
 static DEVICE_ATTR_RW(dim_layer_enable);
 static DEVICE_ATTR(dim_alpha, S_IRUGO|S_IWUSR, NULL, xm_fod_dim_layer_alpha_store);
@@ -434,6 +459,9 @@ static DEVICE_ATTR_RO(dpms);
 static DEVICE_ATTR_RO(modes);
 static DEVICE_ATTR_RO(panel_info);
 static DEVICE_ATTR_RW(disp_param);
+#ifdef CONFIG_PANEL_DC_DIMMING
+static DEVICE_ATTR_RW(dc_dimming);
+#endif
 static DEVICE_ATTR_RW(mipi_reg);
 static DEVICE_ATTR_RO(doze_brightness);
 static DEVICE_ATTR_RW(doze_backlight);
@@ -446,6 +474,9 @@ static struct attribute *connector_dev_attrs[] = {
 	&dev_attr_modes.attr,
 	&dev_attr_panel_info.attr,
 	&dev_attr_disp_param.attr,
+#ifdef CONFIG_PANEL_DC_DIMMING
+	&dev_attr_dc_dimming.attr,
+#endif
 	&dev_attr_doze_brightness.attr,
 	&dev_attr_doze_backlight.attr,
 	&dev_attr_dim_alpha.attr,

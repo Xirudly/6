@@ -369,6 +369,16 @@ struct sde_crtc_respool {
 	struct sde_crtc_res_ops ops;
 };
 
+#ifdef CONFIG_PANEL_DC_DIMMING
+/**
+ * sde_crtc_dc_state - dc crtc state
+ */
+struct sde_crtc_dc_state {
+	uint32_t dimlayer_backlight_stash;
+	uint8_t  dimlayer_alpha_stash;
+};
+#endif
+
 /**
  * struct sde_crtc_state - sde container for atomic crtc state
  * @base: Base drm crtc state structure
@@ -446,6 +456,12 @@ struct sde_crtc_state {
 	bool dim_layer_status;
 	struct sde_hw_dim_layer *fingerprint_dim_layer;
 	struct sde_crtc_respool rp;
+
+#ifdef CONFIG_PANEL_DC_DIMMING
+	uint32_t num_dim_layers_bank;
+	struct sde_hw_dim_layer *dc_dim_layer;
+	struct sde_crtc_dc_state dc_state;
+#endif
 };
 
 enum sde_crtc_irq_state {
