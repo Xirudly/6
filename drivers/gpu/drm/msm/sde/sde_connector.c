@@ -709,6 +709,9 @@ void sde_crtc_fod_ui_ready(struct dsi_display *display, int type, int value)
 	sysfs_notify(&display->drm_conn->kdev->kobj, NULL, "fod_ui_ready");
 }
 
+#ifdef CONFIG_PANEL_DC_DIMMING
+int dsi_panel_set_dc_dimming(struct dsi_panel *panel, int dc_dimming);
+#endif
 int sde_connector_update_hbm(struct sde_connector *c_conn)
 {
 	struct drm_connector *connector;
@@ -755,6 +758,17 @@ int sde_connector_update_hbm(struct sde_connector *c_conn)
 	if (!hbm_overlay) {
 		if (dsi_display->panel->fod_dimlayer_hbm_enabled) {
 			SDE_ATRACE_BEGIN("set_hbm_off");
+#ifdef CONFIG_PANEL_DC_DIMMING
+			if (dsi_display->panel->dc_dimming_saved_state) {
+				dsi_display->panel->dc_dimming_saved_state = false;
+				rc = dsi_panel_set_dc_dimming(dsi_display->panel, true);
+				if (rc) {
+					pr_err("failed to set dc dimming on, rc=%d\n", rc);
+					return rc;
+				}
+				pr_info("HBM fod off: restore dc dimming\n");
+			}
+#endif
 			//_sde_connector_update_bl_scale(c_conn);
 			mutex_lock(&dsi_display->panel->panel_lock);
 			sde_encoder_wait_for_event(c_conn->encoder, MSM_ENC_VBLANK);
@@ -866,6 +880,17 @@ int sde_connector_update_hbm(struct sde_connector *c_conn)
 				pr_err("failed to send DSI_GAMMA_CMD_SET_HBM_ON cmds, rc=%d\n", rc);
 				return rc;
 			}
+#ifdef CONFIG_PANEL_DC_DIMMING
+			if (dsi_display->panel->dc_dimming_enabled) {
+				dsi_display->panel->dc_dimming_saved_state = true;
+				rc = dsi_panel_set_dc_dimming(dsi_display->panel, false);
+				if (rc) {
+					pr_err("failed to set dc dimming off, rc=%d\n", rc);
+					return rc;
+				}
+				pr_info("HBM fod on: disable dc dimming\n");
+			}
+#endif
 		}
 	}
 	pr_debug("hbm_overlay:%d fod_dimlayer_hbm_enabled:%d\n", hbm_overlay, dsi_display->panel->fod_dimlayer_hbm_enabled);
