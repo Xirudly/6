@@ -309,6 +309,7 @@ struct dsi_panel {
 	struct lockdowninfo_cfg lockdowninfo_read;
 #ifdef CONFIG_PANEL_DC_DIMMING
 	bool dc_dimming_enabled;
+	bool dc_dimming_saved_state;
 #endif
 };
 
