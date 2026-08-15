@@ -528,6 +528,10 @@ int drm_sysfs_connector_add(struct drm_connector *connector)
 		return PTR_ERR(connector->kdev);
 	}
 
+#ifdef CONFIG_PANEL_DC_DIMMING
+	sysfs_chmod_file(&connector->kdev->kobj, &dev_attr_dc_dimming.attr, 0666);
+#endif
+
 	/* Let userspace know we have a new connector */
 	drm_sysfs_hotplug_event(dev);
 
