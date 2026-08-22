@@ -156,7 +156,7 @@ ifdef CONFIG_MSM_CSPL
 	Q6_OBJS += msm-cirrus-playback.o
 endif
 
-LINUX_INC +=	-Iinclude/linux
+LINUX_INC +=	-I$(srctree)/include/linux
 
 INCS +=		$(COMMON_INC) \
 		$(UAPI_INC)
